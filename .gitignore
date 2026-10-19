@@ -1,0 +1,9 @@
+node_modules/
+.expo/
+.env
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+dist/
+android/
+ios/

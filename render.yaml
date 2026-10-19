@@ -1,0 +1,26 @@
+# Configuración propuesta. Crear este servicio en Render activa un plan de pago.
+# No se despliega por subir este archivo a GitHub.
+services:
+  - type: web
+    name: toutaunclicla-livraison
+    runtime: node
+    plan: starter
+    rootDir: server
+    buildCommand: npm test
+    startCommand: node start.mjs
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: '24'
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATABASE_PATH
+        value: /var/data/livraison.sqlite
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+    disk:
+      name: livraison-data
+      mountPath: /var/data
+      sizeGB: 1

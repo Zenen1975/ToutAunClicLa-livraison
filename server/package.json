@@ -1,0 +1,1 @@
+{"name":"toutaunclicla-livraison-server","private":true,"type":"module","engines":{"node":">=24"},"scripts":{"start":"node start.mjs","test":"node --test test/*.test.mjs","user":"node create-user.mjs"}}
