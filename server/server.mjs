@@ -4,6 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {createStore,Problem} from './core.mjs';
 const store=createStore(process.env.DATABASE_PATH || 'livraison.sqlite');
 const page=readFileSync(new URL('./public/index.html',import.meta.url));
+const driverPage=readFileSync(new URL('./public/livreur.html',import.meta.url));
 const attempts=new Map();
 export const server=http.createServer(async(req,res)=>{
   res.setHeader('Cache-Control','no-store');
@@ -13,6 +14,7 @@ export const server=http.createServer(async(req,res)=>{
   try {
     const path=new URL(req.url,'http://localhost').pathname;
     if(req.method==='GET'&&path==='/'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(page);return;}
+    if(req.method==='GET'&&['/livreur','/livreur/','/repartidor','/repartidor/'].includes(path)){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(driverPage);return;}
     if(req.method==='GET'&&path==='/health'){send(200,{ok:true});return;}
     let p={};
     if(['POST','PATCH'].includes(req.method)) {
@@ -52,3 +54,4 @@ export const server=http.createServer(async(req,res)=>{
   }catch(e){send(e.status || 500,{error:e.status?e.message:'Error del servidor / Erreur serveur'});if(!e.status)console.error(e);}
 });
 if(process.argv[1]===fileURLToPath(import.meta.url))server.listen(Number(process.env.PORT || 8787),process.env.HOST || '127.0.0.1',()=>console.log('Panel: http://127.0.0.1:'+ (process.env.PORT || 8787)));
+

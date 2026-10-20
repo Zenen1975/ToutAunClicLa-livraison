@@ -1,0 +1,42 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {createStore} from '../core.mjs';
+
+test('Driver web routes, consent, GPS and delivery authorization work over HTTP',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'tacl-http-'));
+  process.env.DATABASE_PATH=join(dir,'test.sqlite');
+  const store=createStore(process.env.DATABASE_PATH);
+  const password='test-password-123';
+  const admin=store.createUser({name:'Admin',email:'admin@example.test',password,role:'admin'});
+  const a=store.createUser({name:'Driver A',email:'a@example.test',password});
+  store.createUser({name:'Driver B',email:'b@example.test',password});
+  const {server}=await import('../server.mjs');
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+server.address().port;
+  async function api(path,token,body,method=body?'POST':'GET'){
+    const r=await fetch(base+path,{method,headers:{Authorization:'Bearer '+(token||''),'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});return {status:r.status,data:await r.json()};
+  }
+  try{
+    for(const path of ['/livreur','/livreur/','/repartidor']){const r=await fetch(base+path);assert.equal(r.status,200);assert.match(await r.text(),/id="consent"/)}
+    assert.equal((await api('/deliveries')).status,401);
+    const at=(await api('/login',null,{email:admin.email,password})).data.token;
+    const dt=(await api('/login',null,{email:a.email,password})).data.token;
+    const bt=(await api('/login',null,{email:'b@example.test',password})).data.token;
+    assert.equal((await api('/shift/start',dt,{consent:false})).status,400);
+    const shift=(await api('/shift/start',dt,{consent:true})).data.shiftId;
+    assert.equal((await api('/location',dt,{shiftId:shift,latitude:45.5,longitude:-73.56,accuracy:8,measuredAt:Date.now()})).status,200);
+    assert.equal((await api('/drivers',dt)).status,403);
+    const delivery=(await api('/deliveries',at,{pickup:'Montréal',destination:'Longueuil',driverId:a.id})).data;
+    assert.equal((await api('/deliveries',dt)).data.length,1);
+    assert.equal((await api('/deliveries',bt)).data.length,0);
+    assert.equal((await api('/deliveries/'+delivery.id,bt,{status:'picked_up'},'PATCH')).status,403);
+    assert.equal((await api('/deliveries/'+delivery.id,dt,{status:'picked_up'},'PATCH')).status,200);
+    assert.equal((await api('/deliveries/'+delivery.id,dt,{status:'delivered'},'PATCH')).status,200);
+    await api('/shift/stop',dt,{});
+    const driver=(await api('/drivers',at)).data[0];assert.equal(driver.status,'offline');assert.equal(driver.latitude,null);
+    assert.equal((await api('/location',dt,{shiftId:shift,latitude:45.5,longitude:-73.56,accuracy:8,measuredAt:Date.now()})).status,409);
+  }finally{await new Promise(resolve=>server.close(resolve));store.db.close();rmSync(dir,{recursive:true,force:true})}
+});
