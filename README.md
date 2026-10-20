@@ -31,3 +31,7 @@ La sesión web se guarda solamente en memoria: al recargar, hay que volver a ini
 
 La integración con los pedidos de la tienda ToutAunClicLa y las solicitudes públicas de recogida se implementarán en fases posteriores. El sistema inicial permite asignar entregas manualmente.
 
+
+## Alarmas de asignación
+
+En el acceso web, « Activar y probar sonido » habilita un aviso de seis tonos que se repite cada ocho segundos mientras haya nuevas asignaciones sin reconocer. « Entendido » silencia el aviso sin modificar la entrega. Las asignaciones pendientes al iniciar sesión también se anuncian; las ya reconocidas no vuelven a sonar durante esa sesión. El botón de desactivar sonido y el fin del turno liberan el audio. La detección utiliza la actualización existente de entregas cada doce segundos con la página activa. El volumen, el modo silencio y las restricciones de audio del navegador se deben comprobar en cada dispositivo; no son notificaciones push y no se garantiza sonido con la pantalla bloqueada ni en segundo plano.
