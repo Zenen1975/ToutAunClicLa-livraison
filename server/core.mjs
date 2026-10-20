@@ -16,7 +16,10 @@ export function createStore(path = 'livraison.sqlite') {
     CREATE TABLE IF NOT EXISTS shifts(user_id TEXT PRIMARY KEY REFERENCES users(id), shift_id TEXT,
       consent_at INTEGER, latitude REAL, longitude REAL, accuracy REAL, measured_at INTEGER, received_at INTEGER);
     CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY, pickup TEXT NOT NULL, destination TEXT NOT NULL,
-      driver_id TEXT REFERENCES users(id), status TEXT NOT NULL DEFAULT 'assigned', created_at INTEGER NOT NULL);`);
+      driver_id TEXT REFERENCES users(id), status TEXT NOT NULL DEFAULT 'assigned', created_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS assignment_emails(delivery_id TEXT PRIMARY KEY REFERENCES deliveries(id),
+      attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL,
+      sent_at INTEGER, skipped_at INTEGER, last_error TEXT);`);
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
   const userView = u => ({id:u.id, name:u.name, email:u.email, role:u.role});
@@ -92,7 +95,13 @@ export function createStore(path = 'livraison.sqlite') {
       const d=store.drivers(u).find(d=>d.id===p.driverId);
       fail(!d || !d.fresh,409,'Repartidor sin GPS reciente / Livreur sans GPS récent');
       fail(d.status!=='available',409,'Repartidor ocupado / Livreur occupé');
-      const did=id(); run('INSERT INTO deliveries(id,pickup,destination,driver_id,created_at) VALUES(?,?,?,?,?)',did,p.pickup.trim(),p.destination.trim(),p.driverId,Date.now());
+      const did=id(), now=Date.now();
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        run('INSERT INTO deliveries(id,pickup,destination,driver_id,created_at) VALUES(?,?,?,?,?)',did,p.pickup.trim(),p.destination.trim(),p.driverId,now);
+        run('INSERT INTO assignment_emails(delivery_id,next_attempt_at) VALUES(?,?)',did,now);
+        db.exec('COMMIT');
+      } catch(error) { db.exec('ROLLBACK'); throw error; }
       return one('SELECT * FROM deliveries WHERE id=?',did);
     },
     updateDelivery(u,did,status) {

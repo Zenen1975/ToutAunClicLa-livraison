@@ -13,6 +13,7 @@ Base para una app de repartidores en iPhone y Android, con panel de administraci
 
 ```bash
 cd server
+npm ci
 npm test
 npm start
 ```
@@ -35,3 +36,26 @@ La integración con los pedidos de la tienda ToutAunClicLa y las solicitudes pú
 ## Alarmas de asignación
 
 En el acceso web, « Activar y probar sonido » habilita un aviso de seis tonos que se repite cada ocho segundos mientras haya nuevas asignaciones sin reconocer. « Entendido » silencia el aviso sin modificar la entrega. Las asignaciones pendientes al iniciar sesión también se anuncian; las ya reconocidas no vuelven a sonar durante esa sesión. El botón de desactivar sonido y el fin del turno liberan el audio. La detección utiliza la actualización existente de entregas cada doce segundos con la página activa. El volumen, el modo silencio y las restricciones de audio del navegador se deben comprobar en cada dispositivo; no son notificaciones push y no se garantiza sonido con la pantalla bloqueada ni en segundo plano.
+
+
+## Correos de asignación
+
+Cada nueva entrega guarda un aviso pendiente en SQLite, en la misma transacción que la asignación. Un proceso del servidor lo envía al correo de la cuenta del repartidor. El mensaje contiene recogida, destino y un enlace HTTPS al panel `/livreur`, en francés y español; no contiene contraseña ni permite aceptar la entrega sin iniciar sesión.
+
+**Desactivado hasta configurar la cuenta de envío.** En el servicio existente de Render, cambiar **Build Command** a `npm ci && npm test` (Root Directory: `server`). El archivo `render.yaml` propone lo mismo, pero no modifica por sí solo un servicio creado manualmente.
+
+Agregar estas variables privadas en **Environment**:
+
+| Variable | Valor |
+| --- | --- |
+| `ASSIGNMENT_EMAIL_ENABLED` | `true`, solo cuando los demás valores estén listos |
+| `SMTP_HOST` | Servidor SMTP del proveedor |
+| `SMTP_PORT` | `465` (TLS directo) o `587` (STARTTLS obligatorio) |
+| `SMTP_USER` | Correo de la cuenta remitente |
+| `SMTP_PASSWORD` | Contraseña SMTP o contraseña de aplicación, solo en Render |
+| `SMTP_FROM` | Correo remitente autorizado; por defecto `SMTP_USER` |
+| `PUBLIC_APP_URL` | Origen HTTPS real, por ejemplo `https://toutaunclicla-livraison-1.onrender.com` |
+
+El proveedor debe autorizar el remitente y tener los registros de correo del dominio configurados. No subir contraseñas al repositorio ni enviarlas por chat. Reiniciar/desplegar tras guardar las variables. Confirmar el primer envío real asignando una entrega de prueba a un repartidor conectado, con correo propio controlado, y comprobar su bandeja de entrada y spam.
+
+Los avisos fallidos se reintentan hasta cinco veces con esperas crecientes; la cola se conserva con el disco persistente. Los avisos de más de 24 horas o de entregas ya recogidas se omiten. Se mantiene un identificador estable de mensaje para los reintentos, aunque una interrupción justo después de que SMTP acepte el correo puede producir un duplicado. La aceptación SMTP no garantiza llegada a la bandeja de entrada. El correo no impide crear la entrega ni sustituye la alarma en el panel. Para desactivarlo, establecer `ASSIGNMENT_EMAIL_ENABLED=false`. Las pruebas automáticas usan un emisor simulado y no envían correos reales.

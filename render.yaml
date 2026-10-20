@@ -6,7 +6,7 @@ services:
     runtime: node
     plan: starter
     rootDir: server
-    buildCommand: npm test
+    buildCommand: npm ci && npm test
     startCommand: node start.mjs
     healthCheckPath: /health
     envVars:

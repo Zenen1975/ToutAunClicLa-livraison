@@ -2,7 +2,9 @@ import http from 'node:http';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {createStore,Problem} from './core.mjs';
+import {createAssignmentMailer} from './assignment-mail.mjs';
 const store=createStore(process.env.DATABASE_PATH || 'livraison.sqlite');
+const mailer=createAssignmentMailer(store);
 const page=readFileSync(new URL('./public/index.html',import.meta.url));
 const driverPage=readFileSync(new URL('./public/livreur.html',import.meta.url));
 const attempts=new Map();
@@ -47,11 +49,16 @@ export const server=http.createServer(async(req,res)=>{
       data=store.createUser({...p,role:'driver'});
     }
     else if(req.method==='GET'&&path==='/deliveries')data=store.deliveries(u);
-    else if(req.method==='POST'&&path==='/deliveries')data=store.createDelivery(u,p);
+    else if(req.method==='POST'&&path==='/deliveries'){
+      data=store.createDelivery(u,p);
+      void mailer.flush();
+    }
     else if(req.method==='PATCH'&&/^\/deliveries\/[a-f0-9]{48}$/.test(path))data=store.updateDelivery(u,path.split('/')[2],p.status);
     else throw new Problem(404,'Ruta no encontrada');
     send(200,data);
   }catch(e){send(e.status || 500,{error:e.status?e.message:'Error del servidor / Erreur serveur'});if(!e.status)console.error(e);}
 });
+server.on('listening',()=>mailer.start());
+server.on('close',()=>mailer.stop());
 if(process.argv[1]===fileURLToPath(import.meta.url))server.listen(Number(process.env.PORT || 8787),process.env.HOST || '127.0.0.1',()=>console.log('Panel: http://127.0.0.1:'+ (process.env.PORT || 8787)));
 
