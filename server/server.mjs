@@ -3,11 +3,13 @@ import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {createStore,Problem} from './core.mjs';
 import {createAssignmentMailer} from './assignment-mail.mjs';
+import {checkEmail} from './email-check.mjs';
 const store=createStore(process.env.DATABASE_PATH || 'livraison.sqlite');
 const mailer=createAssignmentMailer(store);
 const page=readFileSync(new URL('./public/index.html',import.meta.url));
 const driverPage=readFileSync(new URL('./public/livreur.html',import.meta.url));
 const attempts=new Map();
+let nextEmailCheck=0;
 export const server=http.createServer(async(req,res)=>{
   res.setHeader('Cache-Control','no-store');
   res.setHeader('X-Content-Type-Options','nosniff');
@@ -43,6 +45,17 @@ export const server=http.createServer(async(req,res)=>{
     else if(req.method==='GET'&&path==='/config'){
       if(u.role!=='admin')throw new Problem(403,'Acceso denegado');
       data={mapsKey:process.env.GOOGLE_MAPS_BROWSER_KEY || ''};
+    }
+    else if(req.method==='POST'&&path==='/email/check'){
+      if(u.role!=='admin')throw new Problem(403,'Acceso denegado / Accès refusé');
+      if(Date.now()<nextEmailCheck)throw new Problem(429,'Espera un minuto antes de volver a comprobar / Attendez une minute');
+      nextEmailCheck=Date.now()+60000;
+      data=await checkEmail();
+      data.queue=store.db.prepare(`SELECT
+        SUM(CASE WHEN sent_at IS NOT NULL THEN 1 ELSE 0 END) AS sent,
+        SUM(CASE WHEN sent_at IS NULL AND skipped_at IS NULL AND attempts<5 THEN 1 ELSE 0 END) AS pending,
+        SUM(CASE WHEN sent_at IS NULL AND skipped_at IS NULL AND attempts>=5 THEN 1 ELSE 0 END) AS failed
+        FROM assignment_emails`).get();
     }
     else if(req.method==='POST'&&path==='/users'){
       if(u.role!=='admin')throw new Problem(403,'Acceso denegado');

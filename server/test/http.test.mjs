@@ -13,6 +13,7 @@ test('Driver web routes, consent, GPS and delivery authorization work over HTTP'
   const admin=store.createUser({name:'Admin',email:'admin@example.test',password,role:'admin'});
   const a=store.createUser({name:'Driver A',email:'a@example.test',password});
   store.createUser({name:'Driver B',email:'b@example.test',password});
+  process.env.ASSIGNMENT_EMAIL_ENABLED='false'; // Tests must never send real mail, including during Render builds.
   const {server}=await import('../server.mjs');
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base='http://127.0.0.1:'+server.address().port;
@@ -22,10 +23,16 @@ test('Driver web routes, consent, GPS and delivery authorization work over HTTP'
   try{
     for(const path of ['/livreur','/livreur/','/repartidor']){const r=await fetch(base+path);assert.equal(r.status,200);assert.match(await r.text(),/id="consent"/)}
     assert.equal((await api('/deliveries')).status,401);
+    assert.equal((await api('/email/check',null,{})).status,401);
     const at=(await api('/login',null,{email:admin.email,password})).data.token;
     const dt=(await api('/login',null,{email:a.email,password})).data.token;
     const bt=(await api('/login',null,{email:'b@example.test',password})).data.token;
     assert.equal((await api('/shift/start',dt,{consent:false})).status,400);
+    assert.equal((await api('/email/check',dt,{})).status,403);
+    const check=await api('/email/check',at,{});
+    assert.equal(check.data.code,'email_disabled');
+    assert.ok(!JSON.stringify(check.data).includes('SMTP_PASSWORD'));
+    assert.equal((await api('/email/check',at,{})).status,429);
     const shift=(await api('/shift/start',dt,{consent:true})).data.shiftId;
     assert.equal((await api('/location',dt,{shiftId:shift,latitude:45.5,longitude:-73.56,accuracy:8,measuredAt:Date.now()})).status,200);
     assert.equal((await api('/drivers',dt)).status,403);

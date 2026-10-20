@@ -2,6 +2,8 @@ const escapeHtml = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;'
 const mailbox = value => typeof value === 'string' && /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(value);
 
 export function emailConfig(env=process.env) {
+  env={...env};
+  for(const key of ['ASSIGNMENT_EMAIL_ENABLED','SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_FROM','PUBLIC_APP_URL'])if(typeof env[key]==='string')env[key]=env[key].trim();
   if(env.ASSIGNMENT_EMAIL_ENABLED !== 'true')return null;
   const port=Number(env.SMTP_PORT || 465);
   if(!env.SMTP_HOST || !mailbox(env.SMTP_USER) || !env.SMTP_PASSWORD || !mailbox(env.SMTP_FROM || env.SMTP_USER) || ![465,587].includes(port))throw Error('Configure SMTP_HOST, SMTP_PORT (465/587), SMTP_USER, SMTP_PASSWORD y SMTP_FROM.');
