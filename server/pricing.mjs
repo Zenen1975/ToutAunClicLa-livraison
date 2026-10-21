@@ -6,7 +6,7 @@ export function priceRoute({distanceMeters,durationSeconds,baselineSeconds}) {
   const extraDistanceBlocks=Math.ceil(Math.max(0,distanceMeters-3000)/500);
   const delaySeconds=Math.max(0,durationSeconds-baselineSeconds);
   const trafficBlocks=Math.floor(delaySeconds/600);
-  const distanceCents=600+extraDistanceBlocks*50,trafficCents=trafficBlocks*250;
+  const distanceCents=600+extraDistanceBlocks*59,trafficCents=trafficBlocks*250;
   return {currency:'CAD',distanceMeters,durationSeconds,baselineSeconds,delaySeconds,extraDistanceBlocks,trafficBlocks,
     distanceCents,trafficCents,totalCents:distanceCents+trafficCents};
 }
