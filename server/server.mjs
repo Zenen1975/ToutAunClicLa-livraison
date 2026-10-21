@@ -108,8 +108,12 @@ export const server=http.createServer(async(req,res)=>{
       else if(p.action==='decline')data=store.declineRequest(u,requestId);
       else throw new Problem(400,'Acción incorrecta / Action invalide');
     }
+    else if(req.method==='POST'&&path==='/admin/quotes'){
+      if(u.role!=='admin')throw new Problem(403,'Acceso denegado / Accès refusé');
+      data=store.saveQuote(await computeQuote(p));
+    }
     else if(req.method==='POST'&&path==='/deliveries'){
-      data=store.createDelivery(u,p);
+      data=p.requestId?store.createDelivery(u,p):store.assignQuotedDelivery(u,p);
       void mailer.flush();
     }
     else if(req.method==='PATCH'&&/^\/deliveries\/[a-f0-9]{48}$/.test(path))data=store.updateDelivery(u,path.split('/')[2],p.status);

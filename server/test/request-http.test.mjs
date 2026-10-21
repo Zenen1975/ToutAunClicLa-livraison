@@ -38,5 +38,25 @@ test('HTTP quote → accepted price and tip → admin assignment → restaurant 
   assert.equal((await api(statusPath,{token:body.statusToken})).data.status,'assigned');assert.equal((await api('/deliveries',{token:dt})).data[0].recipient_phone,body.recipientPhone);
   await api('/batches/'+assigned.data.batch_id+'/pickup',{token:dt,body:{}});assert.equal((await api(statusPath,{token:body.statusToken})).data.status,'picked_up');
   await api('/deliveries/'+assigned.data.id,{token:dt,method:'PATCH',body:{status:'delivered'}});assert.equal((await api(statusPath,{token:body.statusToken})).data.status,'delivered');
+
+  // Direct admin assignments require a fresh reviewed quote, preserve prices and retry without duplicates.
+  assert.equal((await api('/admin/quotes',{body:route})).status,401);
+  assert.equal((await api('/admin/quotes',{token:dt,body:route})).status,403);
+  assert.equal((await api('/deliveries',{token:at,body:{...route,driverId:driver.id}})).status,400);
+  const aq=await api('/admin/quotes',{token:at,body:route});assert.equal(aq.status,200);assert.equal(aq.data.subtotalCents,1336);
+  const direct={...route,quoteId:aq.data.quoteId,acceptPrice:true,driverId:driver.id,tipCents:800,totalCents:1,commissionCents:0};
+  assert.equal((await api('/deliveries',{token:dt,body:direct})).status,403);
+  assert.equal((await api('/deliveries',{token:at,body:{...direct,acceptPrice:false}})).status,400);
+  assert.equal((await api('/deliveries',{token:at,body:{...direct,pickup:'Changed pickup'}})).status,409);
+  assert.equal((await api('/deliveries',{token:at,body:{...direct,tipCents:123}})).status,400);
+  store.db.prepare('UPDATE delivery_quotes SET expires_at=0 WHERE id=?').run(aq.data.quoteId);
+  assert.equal((await api('/deliveries',{token:at,body:direct})).status,409);
+  store.db.prepare('UPDATE delivery_quotes SET expires_at=? WHERE id=?').run(Date.now()+600000,aq.data.quoteId);
+  const manual=await api('/deliveries',{token:at,body:direct});assert.equal(manual.status,200);
+  assert.equal(manual.data.delivery_fare_cents,1336);assert.equal(manual.data.tip_cents,800);assert.equal(manual.data.driver_payout_cents,2002);assert.equal(manual.data.total_price_cents,2336);assert.equal(manual.data.commission_cents,134);
+  assert.deepEqual((await api('/deliveries',{token:at,body:direct})).data,manual.data);
+  assert.equal((await api('/deliveries',{token:at,body:{...direct,tipCents:500}})).status,409);
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM assignment_emails WHERE delivery_id=?').get(manual.data.id).n,1);
+  const reopened=createStore(process.env.DATABASE_PATH);assert.equal(reopened.deliveries(driver).find(d=>d.id===manual.data.id).driver_payout_cents,2002);reopened.db.close();
  }finally{globalThis.fetch=realFetch;await new Promise(r=>server.close(r));store.db.close();rmSync(dir,{recursive:true,force:true})}
 });

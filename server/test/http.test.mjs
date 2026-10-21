@@ -51,7 +51,9 @@ test('Driver web routes, consent, GPS and delivery authorization work over HTTP'
     const shift=(await api('/shift/start',dt,{consent:true})).data.shiftId;
     assert.equal((await api('/location',dt,{shiftId:shift,latitude:45.5,longitude:-73.56,accuracy:8,measuredAt:Date.now()})).status,200);
     assert.equal((await api('/drivers',dt)).status,403);
-    const delivery=(await api('/deliveries',at,{pickup:'Montréal',destination:'Longueuil',driverId:a.id})).data;
+    const route={pickup:'Montréal',destination:'Longueuil',pickupPostalCode:'H2X 1Y4',destinationPostalCode:'J4K 1A1'};
+    const quote=store.saveQuote({...route,distanceMeters:5000,durationSeconds:1200,baselineSeconds:1200});
+    const delivery=(await api('/deliveries',at,{...route,quoteId:quote.quoteId,acceptPrice:true,driverId:a.id})).data;
     assert.equal((await api('/deliveries',dt)).data.length,1);
     assert.equal((await api('/deliveries',bt)).data.length,0);
     assert.equal((await api('/deliveries/'+delivery.id,bt,{status:'picked_up'},'PATCH')).status,403);

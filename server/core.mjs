@@ -38,6 +38,8 @@ export function createStore(path = 'livraison.sqlite') {
   if(!db.prepare('PRAGMA table_info(deliveries)').all().some(c=>c.name==='batch_id'))db.exec('ALTER TABLE deliveries ADD COLUMN batch_id TEXT');
   const deliveryColumns=new Set(db.prepare('PRAGMA table_info(deliveries)').all().map(c=>c.name));
   for(const name of ['total_price_cents','commission_cents','driver_payout_cents','delivery_fare_cents','tip_cents','gst_cents','qst_cents'])if(!deliveryColumns.has(name))db.exec('ALTER TABLE deliveries ADD COLUMN '+name+' INTEGER');
+  if(!deliveryColumns.has('admin_quote_id'))db.exec('ALTER TABLE deliveries ADD COLUMN admin_quote_id TEXT REFERENCES delivery_quotes(id)');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS deliveries_admin_quote ON deliveries(admin_quote_id)');
   const quoteColumns=new Set(db.prepare('PRAGMA table_info(delivery_quotes)').all().map(c=>c.name));
   for(const name of ['gst_cents','qst_cents','tax_version'])if(!quoteColumns.has(name))db.exec('ALTER TABLE delivery_quotes ADD COLUMN '+name+' INTEGER NOT NULL DEFAULT 0');
   for(const name of ['pickup_postal_code','destination_postal_code']){
@@ -138,6 +140,7 @@ export function createStore(path = 'livraison.sqlite') {
         return {id:existing.id,reference:'TAC-'+existing.id.slice(0,12).toUpperCase()};
       }
       fail(p.acceptPrice!==true,400,'Acepta el precio para continuar / Acceptez le prix pour continuer');
+      fail(!!one('SELECT id FROM deliveries WHERE admin_quote_id=?',p.quoteId||''),409,'Cotización ya utilizada / Devis déjà utilisé');
       p={...p,...routeInput(p)};
       const tipCents=p.tipCents??0;
       fail(!TIP_OPTIONS.includes(tipCents),400,'Propina incorrecta / Pourboire invalide');
@@ -183,7 +186,24 @@ export function createStore(path = 'livraison.sqlite') {
       run("UPDATE delivery_requests SET status='declined',reviewed_at=? WHERE id=? AND status='pending'",Date.now(),rid);
       return {ok:true};
     },
-    createDelivery(u,p) {
+    assignQuotedDelivery(u,p) {
+      admin(u);
+      fail(p.acceptPrice!==true||typeof p.quoteId!=='string',400,'Calcula y acepta el precio / Calculez et acceptez le prix');
+      const route=routeInput(p),tipCents=p.tipCents??0;
+      fail(!TIP_OPTIONS.includes(tipCents),400,'Propina incorrecta / Pourboire invalide');
+      const quote=one('SELECT * FROM delivery_quotes WHERE id=?',p.quoteId);
+      fail(!quote,409,'Cotización no encontrada / Devis introuvable');
+      fail(['pickup','destination','pickupPostalCode','destinationPostalCode','readyAt'].some(k=>route[k]!==quote[({pickupPostalCode:'pickup_postal_code',destinationPostalCode:'destination_postal_code',readyAt:'ready_at'})[k]||k]),409,'Las direcciones cambiaron. Recalcula el precio / Les adresses ont changé. Recalculez le prix');
+      const existing=one('SELECT * FROM deliveries WHERE admin_quote_id=?',quote.id);
+      if(existing){
+        fail(existing.driver_id!==p.driverId||existing.tip_cents!==tipCents,409,'Cotización ya asignada / Devis déjà assigné');
+        return existing;
+      }
+      fail(quote.expires_at<Date.now()||quote.tax_version!==1,409,'Cotización vencida. Recalcula el precio / Devis expiré. Recalculez le prix');
+      fail(!!one('SELECT id FROM delivery_requests WHERE quote_id=?',quote.id),409,'Cotización ya utilizada / Devis déjà utilisé');
+      return store.createDelivery(u,{pickup:route.pickup,destination:route.destination,driverId:p.driverId}, {...quote,tipCents});
+    },
+    createDelivery(u,p,manualQuote=null) {
       admin(u);
       const request=p.requestId?one('SELECT * FROM delivery_requests WHERE id=?',p.requestId):null;
       if(p.requestId){
@@ -198,11 +218,12 @@ export function createStore(path = 'livraison.sqlite') {
       const joining=d.status!=='available';
       if(joining)fail(!request||p.joinBatch!==true||!d.batch||d.batch.count>=3||same(d.batch.pickup)!==same(request.pickup)||same(d.batch.requesterName)!==same(request.requester_name),409,'Repartidor ocupado o grupo incompatible / Livreur occupé ou tournée incompatible');
       const did=id(), now=Date.now();
-      const quote=request?one('SELECT total_cents,gst_cents,qst_cents FROM delivery_quotes WHERE id=?',request.quote_id):null;
-      const split=quote?splitDeliveryPrice(quote.total_cents,request.tip_cents,{gstCents:quote.gst_cents,qstCents:quote.qst_cents}):null;
+      const quote=request?one('SELECT total_cents,gst_cents,qst_cents FROM delivery_quotes WHERE id=?',request.quote_id):manualQuote;
+      const split=quote?splitDeliveryPrice(quote.total_cents,request?request.tip_cents:manualQuote.tipCents,{gstCents:quote.gst_cents,qstCents:quote.qst_cents}):null;
       db.exec('BEGIN IMMEDIATE');
       try {
         run('INSERT INTO deliveries(id,pickup,destination,driver_id,created_at,batch_id,total_price_cents,commission_cents,driver_payout_cents,delivery_fare_cents,tip_cents,gst_cents,qst_cents) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',did,p.pickup.trim(),p.destination.trim(),p.driverId,now,joining?d.batch.id:did,split?.totalPriceCents??null,split?.commissionCents??null,split?.driverPayoutCents??null,split?.deliveryFareCents??null,split?.tipCents??null,split?.gstCents??null,split?.qstCents??null);
+        if(manualQuote)run('UPDATE deliveries SET admin_quote_id=? WHERE id=?',manualQuote.id,did);
         run('INSERT INTO assignment_emails(delivery_id,next_attempt_at) VALUES(?,?)',did,now);
         if(request){
           const changed=run("UPDATE delivery_requests SET status='assigned',delivery_id=?,reviewed_at=? WHERE id=? AND status='pending'",did,now,request.id);
