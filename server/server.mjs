@@ -9,6 +9,7 @@ const mailer=createAssignmentMailer(store);
 const page=readFileSync(new URL('./public/index.html',import.meta.url));
 const driverPage=readFileSync(new URL('./public/livreur.html',import.meta.url));
 const jingle=readFileSync(new URL('./public/assignment-jingle.mp3',import.meta.url));
+const driverPortrait=readFileSync(new URL('./public/livreur-team-v1.webp',import.meta.url));
 const attempts=new Map();
 let nextEmailCheck=0;
 export const server=http.createServer(async(req,res)=>{
@@ -34,6 +35,7 @@ export const server=http.createServer(async(req,res)=>{
       headers['Content-Length']=end-start+1;
       res.writeHead(status,headers);res.end(req.method==='HEAD'?undefined:jingle.subarray(start,end+1));return;
     }
+    if(['GET','HEAD'].includes(req.method)&&path==='/livreur-team-v1.webp'){res.writeHead(200,{'Content-Type':'image/webp','Content-Length':driverPortrait.length,'Cache-Control':'public, max-age=86400'});res.end(req.method==='HEAD'?undefined:driverPortrait);return;}
     if(req.method==='GET'&&path==='/health'){send(200,{ok:true});return;}
     let p={};
     if(['POST','PATCH'].includes(req.method)) {
