@@ -1,12 +1,12 @@
 // Approved tariff in CAD cents. Round distance up by each additional 500 m;
-// charge only complete 10-minute blocks of predicted congestion delay.
+// charge only complete 5-minute blocks of predicted congestion delay.
 export function priceRoute({distanceMeters,durationSeconds,baselineSeconds}) {
   for(const n of [distanceMeters,durationSeconds,baselineSeconds])if(!Number.isFinite(n)||n<0)throw Error('Invalid route metrics');
   if(!Number.isSafeInteger(distanceMeters)||distanceMeters>40000000||durationSeconds>2592000||baselineSeconds>2592000)throw Error('Invalid route metrics');
   const extraDistanceBlocks=Math.ceil(Math.max(0,distanceMeters-3000)/500);
   const delaySeconds=Math.max(0,durationSeconds-baselineSeconds);
-  const trafficBlocks=Math.floor(delaySeconds/600);
-  const distanceCents=600+extraDistanceBlocks*59,trafficCents=trafficBlocks*250;
+  const trafficBlocks=Math.floor(delaySeconds/300);
+  const distanceCents=600+extraDistanceBlocks*59,trafficCents=trafficBlocks*140;
   return {currency:'CAD',distanceMeters,durationSeconds,baselineSeconds,delaySeconds,extraDistanceBlocks,trafficBlocks,
     distanceCents,trafficCents,totalCents:distanceCents+trafficCents};
 }

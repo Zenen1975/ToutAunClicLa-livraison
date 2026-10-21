@@ -21,20 +21,20 @@ test('HTTP quote → accepted price and tip → admin assignment → restaurant 
   assert.equal((await api('/requests')).status,401);
   const route={pickup:'123 Test Montréal',destination:'456 Test Longueuil',contactPhone:'5145550100',pickupPostalCode:'H2X 1Y4',destinationPostalCode:'J4K 1A1'};
   delete process.env.GOOGLE_ROUTES_API_KEY;assert.equal((await api('/quotes',{body:route})).status,503);process.env.GOOGLE_ROUTES_API_KEY='test-only-key';
-  const q=await api('/quotes',{body:route});assert.equal(q.status,201);assert.equal(q.data.totalCents,1536);assert.ok(!JSON.stringify(q).includes('test-only-key'));
+  const q=await api('/quotes',{body:route});assert.equal(q.status,201);assert.equal(q.data.totalCents,1605);assert.ok(!JSON.stringify(q).includes('test-only-key'));
   const {contactPhone:removedPhone,...requestRoute}=route;
   const body={...requestRoute,quoteId:q.data.quoteId,consent:true,acceptPrice:true,tipCents:500,submissionId:randomUUID(),statusToken:'cd'.repeat(32),requesterName:'Restaurant',recipientName:'Recipient',recipientPhone:'4505550101',itemDescription:'Repas'};
   assert.equal((await api('/requests',{body:{...body,acceptPrice:false}})).status,400);
   const accepted=await api('/requests',{body});assert.equal(accepted.status,201);assert.deepEqual((await api('/requests',{body})).data,accepted.data);
   const statusPath='/request-status/'+accepted.data.id;
   assert.equal((await api(statusPath)).status,404);assert.equal((await api(statusPath,{token:'wrong'})).status,404);
-  const pending=await api(statusPath,{token:body.statusToken});assert.equal(pending.data.status,'pending');assert.equal(pending.data.totalCents,2036);assert.ok(!JSON.stringify(pending).includes(body.recipientPhone));
+  const pending=await api(statusPath,{token:body.statusToken});assert.equal(pending.data.status,'pending');assert.equal(pending.data.totalCents,2105);assert.ok(!JSON.stringify(pending).includes(body.recipientPhone));
   const at=(await api('/login',{body:{email:admin.email,password}})).data.token,dt=(await api('/login',{body:{email:driver.email,password}})).data.token;
   assert.equal((await api('/requests',{token:dt})).status,403);assert.equal((await api('/requests/'+accepted.data.id,{token:dt,method:'PATCH',body:{action:'assign',driverId:driver.id}})).status,403);
   const listed=await api('/requests',{token:at});assert.equal(listed.data.length,1);assert.ok(!JSON.stringify(listed).includes('status_token_hash'));assert.equal(listed.data[0].tip_cents,500);assert.equal(listed.data[0].contact_phone,'');assert.equal(listed.data[0].contact_name,'Restaurant');
   const shift=(await api('/shift/start',{token:dt,body:{consent:true}})).data.shiftId;
   await api('/location',{token:dt,body:{shiftId:shift,latitude:45.5,longitude:-73.5,accuracy:5,measuredAt:Date.now()}});
-  const assigned=await api('/requests/'+accepted.data.id,{token:at,method:'PATCH',body:{action:'assign',driverId:driver.id}});assert.equal(assigned.status,200);assert.equal(assigned.data.driver_payout_cents,1702);assert.equal(assigned.data.commission_cents,134);
+  const assigned=await api('/requests/'+accepted.data.id,{token:at,method:'PATCH',body:{action:'assign',driverId:driver.id}});assert.equal(assigned.status,200);assert.equal(assigned.data.driver_payout_cents,1756);assert.equal(assigned.data.commission_cents,140);
   assert.equal((await api(statusPath,{token:body.statusToken})).data.status,'assigned');assert.equal((await api('/deliveries',{token:dt})).data[0].recipient_phone,body.recipientPhone);
   await api('/batches/'+assigned.data.batch_id+'/pickup',{token:dt,body:{}});assert.equal((await api(statusPath,{token:body.statusToken})).data.status,'picked_up');
   await api('/deliveries/'+assigned.data.id,{token:dt,method:'PATCH',body:{status:'delivered'}});assert.equal((await api(statusPath,{token:body.statusToken})).data.status,'delivered');
@@ -43,7 +43,7 @@ test('HTTP quote → accepted price and tip → admin assignment → restaurant 
   assert.equal((await api('/admin/quotes',{body:route})).status,401);
   assert.equal((await api('/admin/quotes',{token:dt,body:route})).status,403);
   assert.equal((await api('/deliveries',{token:at,body:{...route,driverId:driver.id}})).status,400);
-  const aq=await api('/admin/quotes',{token:at,body:route});assert.equal(aq.status,200);assert.equal(aq.data.subtotalCents,1336);
+  const aq=await api('/admin/quotes',{token:at,body:route});assert.equal(aq.status,200);assert.equal(aq.data.subtotalCents,1396);
   const direct={...route,quoteId:aq.data.quoteId,acceptPrice:true,driverId:driver.id,tipCents:800,totalCents:1,commissionCents:0};
   assert.equal((await api('/deliveries',{token:dt,body:direct})).status,403);
   assert.equal((await api('/deliveries',{token:at,body:{...direct,acceptPrice:false}})).status,400);
@@ -53,10 +53,10 @@ test('HTTP quote → accepted price and tip → admin assignment → restaurant 
   assert.equal((await api('/deliveries',{token:at,body:direct})).status,409);
   store.db.prepare('UPDATE delivery_quotes SET expires_at=? WHERE id=?').run(Date.now()+600000,aq.data.quoteId);
   const manual=await api('/deliveries',{token:at,body:direct});assert.equal(manual.status,200);
-  assert.equal(manual.data.delivery_fare_cents,1336);assert.equal(manual.data.tip_cents,800);assert.equal(manual.data.driver_payout_cents,2002);assert.equal(manual.data.total_price_cents,2336);assert.equal(manual.data.commission_cents,134);
+  assert.equal(manual.data.delivery_fare_cents,1396);assert.equal(manual.data.tip_cents,800);assert.equal(manual.data.driver_payout_cents,2056);assert.equal(manual.data.total_price_cents,2405);assert.equal(manual.data.commission_cents,140);
   assert.deepEqual((await api('/deliveries',{token:at,body:direct})).data,manual.data);
   assert.equal((await api('/deliveries',{token:at,body:{...direct,tipCents:500}})).status,409);
   assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM assignment_emails WHERE delivery_id=?').get(manual.data.id).n,1);
-  const reopened=createStore(process.env.DATABASE_PATH);assert.equal(reopened.deliveries(driver).find(d=>d.id===manual.data.id).driver_payout_cents,2002);reopened.db.close();
+  const reopened=createStore(process.env.DATABASE_PATH);assert.equal(reopened.deliveries(driver).find(d=>d.id===manual.data.id).driver_payout_cents,2056);reopened.db.close();
  }finally{globalThis.fetch=realFetch;await new Promise(r=>server.close(r));store.db.close();rmSync(dir,{recursive:true,force:true})}
 });

@@ -14,7 +14,7 @@ const request=q=>({...input(),quoteId:q.quoteId,acceptPrice:true,consent:true,su
 const quote=s=>s.saveQuote({...input(),distanceMeters:5000,durationSeconds:2100,baselineSeconds:900});
 
 test('Approved pricing respects every distance and congestion boundary; normal driving time is not charged twice',()=>{
- for(const [meters,delay,total]of [[0,0,600],[3000,599,600],[3001,0,659],[3500,0,659],[3501,0,718],[5000,1200,1336],[3000,600,850],[3000,1199.99,850],[3000,1200,1100]]){
+ for(const [meters,delay,total]of [[0,0,600],[3000,299.99,600],[3000,300,740],[3000,599.99,740],[3000,600,880],[3000,899.99,880],[3000,900,1020],[3000,1199.99,1020],[3000,1200,1160],[3001,0,659],[3500,0,659],[3501,0,718],[5000,1200,1396]]){
   const p=priceRoute({distanceMeters:meters,baselineSeconds:1000,durationSeconds:1000+delay});assert.equal(p.totalCents,total);assert.equal(p.currency,'CAD');
  }
  assert.equal(priceRoute({distanceMeters:3000,baselineSeconds:1000,durationSeconds:900}).trafficCents,0);
@@ -24,7 +24,7 @@ test('Approved pricing respects every distance and congestion boundary; normal d
 test('Routes integration requests actual traffic and historical baseline, never fabricates a price or exposes provider errors',async()=>{
  let call;
  const result=await computeQuote(input(),{env:{GOOGLE_ROUTES_API_KEY:'private-key'},fetchRoute:async(url,options)=>{call={url,...options};return {ok:true,json:async()=>({routes:[{distanceMeters:5000,duration:'2100s',staticDuration:'900s'}]})}}});
- assert.equal(result.totalCents,1336);assert.equal(JSON.parse(call.body).routingPreference,'TRAFFIC_AWARE_OPTIMAL');assert.equal(JSON.parse(call.body).origin.address,input().pickup+', '+input().pickupPostalCode);assert.ok(call.headers['X-Goog-FieldMask'].includes('staticDuration'));assert.ok(!JSON.stringify(result).includes('private-key'));
+ assert.equal(result.totalCents,1396);assert.equal(JSON.parse(call.body).routingPreference,'TRAFFIC_AWARE_OPTIMAL');assert.equal(JSON.parse(call.body).origin.address,input().pickup+', '+input().pickupPostalCode);assert.ok(call.headers['X-Goog-FieldMask'].includes('staticDuration'));assert.ok(!JSON.stringify(result).includes('private-key'));
  await assert.rejects(computeQuote(input(),{env:{}}),e=>e.status===503);
  await assert.rejects(computeQuote(input(),{env:{GOOGLE_ROUTES_API_KEY:'private-key'},fetchRoute:async()=>{throw Error('private-key diagnostic')}}),e=>e.status===503&&!e.message.includes('private-key'));
  await assert.rejects(computeQuote(input(),{env:{GOOGLE_ROUTES_API_KEY:'private-key'},fetchRoute:async()=>({ok:true,json:async()=>({routes:[]})})}),e=>e.status===422);
@@ -42,7 +42,7 @@ test('Quote acceptance persists a fixed server-side price, rejects changed/expir
   assert.throws(()=>s.createRequest(request(expired)),e=>e.status===409);
   const created=s.createRequest({...p,totalCents:1,trafficCents:0});
   assert.deepEqual(s.createRequest(p),created);assert.equal(s.requests(admin).length,1);
-  assert.equal(s.requestStatus(created.id,p.statusToken).totalCents,1536);
+  assert.equal(s.requestStatus(created.id,p.statusToken).totalCents,1605);
   assert.equal(s.requestStatus(created.id,p.statusToken).status,'pending');
   assert.throws(()=>s.createRequest({...p,submissionId:randomUUID()}),e=>e.status===409);
   assert.throws(()=>s.requestStatus(created.id,'wrong'),e=>e.status===404);
@@ -58,7 +58,7 @@ test('Quote acceptance persists a fixed server-side price, rejects changed/expir
   assert.throws(()=>s.declineRequest(admin,created.id),e=>e.status===409);
   s.updateDelivery(a,delivery.id,'picked_up');assert.equal(s.requestStatus(created.id,p.statusToken).status,'picked_up');s.updateDelivery(a,delivery.id,'delivered');assert.equal(s.requestStatus(created.id,p.statusToken).status,'delivered');
   assert.ok(!JSON.stringify(s.requests(admin)).includes(p.statusToken));assert.ok(!('status_token_hash' in s.requests(admin)[0]));assert.ok(!('contact_phone' in s.requestStatus(created.id,p.statusToken)));
-  s.db.close();s=createStore(file);assert.equal(s.requestStatus(created.id,p.statusToken).totalCents,1536);assert.equal(s.requests(admin).length,1);
+  s.db.close();s=createStore(file);assert.equal(s.requestStatus(created.id,p.statusToken).totalCents,1605);assert.equal(s.requests(admin).length,1);
   const declined=s.createRequest(request(quote(s)));s.declineRequest(admin,declined.id);assert.equal(s.requestStatus(declined.id,p.statusToken).status,'declined');assert.throws(()=>s.createDelivery(admin,{requestId:declined.id,driverId:a.id}),e=>e.status===409);
  }finally{s.db.close();rmSync(dir,{recursive:true,force:true})}
 });
