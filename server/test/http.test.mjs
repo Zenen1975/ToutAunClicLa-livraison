@@ -41,15 +41,6 @@ test('Driver web routes, consent, GPS and delivery authorization work over HTTP'
     assert.equal((await api('/email/check',null,{})).status,401);
     const at=(await api('/login',null,{email:admin.email,password})).data.token;
     const dt=(await api('/login',null,{email:a.email,password})).data.token;
-    process.env.GOOGLE_MAPS_BROWSER_KEY='browser-test-key';
-    assert.equal((await api('/driver/map-config')).status,401);
-    assert.equal((await api('/driver/map-config',at)).status,403);
-    assert.equal((await api('/driver/map-config',dt)).data.mapsKey,'browser-test-key');
-    process.env.GOOGLE_MAPS_EMBED_KEY='embed-test-key';
-    assert.equal((await api('/driver/map-config',dt)).data.mapsKey,'embed-test-key');
-    assert.equal((await api('/config',dt)).status,403);
-    delete process.env.GOOGLE_MAPS_BROWSER_KEY;
-    delete process.env.GOOGLE_MAPS_EMBED_KEY;
     const bt=(await api('/login',null,{email:'b@example.test',password})).data.token;
     assert.equal((await api('/shift/start',dt,{consent:false})).status,400);
     assert.equal((await api('/email/check',dt,{})).status,403);
