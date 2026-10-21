@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {createStore} from '../core.mjs';
-import {priceRoute} from '../pricing.mjs';
+import {priceRoute,deliveryTaxes,splitDeliveryPrice} from '../pricing.mjs';
 import {computeQuote} from '../routes.mjs';
 import {postalCode} from '../addresses.mjs';
 
@@ -42,7 +42,7 @@ test('Quote acceptance persists a fixed server-side price, rejects changed/expir
   assert.throws(()=>s.createRequest(request(expired)),e=>e.status===409);
   const created=s.createRequest({...p,totalCents:1,trafficCents:0});
   assert.deepEqual(s.createRequest(p),created);assert.equal(s.requests(admin).length,1);
-  assert.equal(s.requestStatus(created.id,p.statusToken).totalCents,1300);
+  assert.equal(s.requestStatus(created.id,p.statusToken).totalCents,1495);
   assert.equal(s.requestStatus(created.id,p.statusToken).status,'pending');
   assert.throws(()=>s.createRequest({...p,submissionId:randomUUID()}),e=>e.status===409);
   assert.throws(()=>s.requestStatus(created.id,'wrong'),e=>e.status===404);
@@ -58,7 +58,7 @@ test('Quote acceptance persists a fixed server-side price, rejects changed/expir
   assert.throws(()=>s.declineRequest(admin,created.id),e=>e.status===409);
   s.updateDelivery(a,delivery.id,'picked_up');assert.equal(s.requestStatus(created.id,p.statusToken).status,'picked_up');s.updateDelivery(a,delivery.id,'delivered');assert.equal(s.requestStatus(created.id,p.statusToken).status,'delivered');
   assert.ok(!JSON.stringify(s.requests(admin)).includes(p.statusToken));assert.ok(!('status_token_hash' in s.requests(admin)[0]));assert.ok(!('contact_phone' in s.requestStatus(created.id,p.statusToken)));
-  s.db.close();s=createStore(file);assert.equal(s.requestStatus(created.id,p.statusToken).totalCents,1300);assert.equal(s.requests(admin).length,1);
+  s.db.close();s=createStore(file);assert.equal(s.requestStatus(created.id,p.statusToken).totalCents,1495);assert.equal(s.requests(admin).length,1);
   const declined=s.createRequest(request(quote(s)));s.declineRequest(admin,declined.id);assert.equal(s.requestStatus(declined.id,p.statusToken).status,'declined');assert.throws(()=>s.createDelivery(admin,{requestId:declined.id,driverId:a.id}),e=>e.status===409);
  }finally{s.db.close();rmSync(dir,{recursive:true,force:true})}
 });
@@ -71,7 +71,7 @@ test('Three separately priced requests can join one pickup before collection; ea
   const orders=[];
   for(let i=0;i<4;i++){const tipCents=[500,800,1200,1700][i];const q=s.saveQuote({...input(),destination:'Destination '+i,distanceMeters:3000+i*500,durationSeconds:900,baselineSeconds:900});const p={...request(q),destination:q.destination,tipCents};orders.push({p,created:s.createRequest(p)});}
   const first=s.createDelivery(admin,{requestId:orders[0].created.id,driverId:a.id});
-  assert.equal(first.total_price_cents,1100);assert.equal(first.driver_payout_cents,1040);assert.equal(first.commission_cents,60);assert.equal(first.delivery_fare_cents,600);assert.equal(first.tip_cents,500);
+  assert.equal(first.total_price_cents,1190);assert.equal(first.driver_payout_cents,1040);assert.equal(first.commission_cents,60);assert.equal(first.delivery_fare_cents,600);assert.equal(first.tip_cents,500);
   assert.throws(()=>s.createDelivery(admin,{requestId:orders[1].created.id,driverId:a.id}),e=>e.status===409);
   const mismatch=s.createRequest({...request(quote(s)),requesterName:'Other restaurant'});
   assert.throws(()=>s.createDelivery(admin,{requestId:mismatch.id,driverId:a.id,joinBatch:true}),e=>e.status===409);
@@ -85,7 +85,7 @@ test('Three separately priced requests can join one pickup before collection; ea
   assert.throws(()=>s.createDelivery(admin,{requestId:orders[3].created.id,driverId:a.id,joinBatch:true}),e=>e.status===409);
   for(const o of orders.slice(0,3))assert.equal(s.requestStatus(o.created.id,o.p.statusToken).status,'picked_up');
   s.updateDelivery(a,first.id,'delivered');assert.equal(s.requestStatus(orders[0].created.id,orders[0].p.statusToken).status,'delivered');assert.equal(s.requestStatus(orders[1].created.id,orders[1].p.statusToken).status,'picked_up');
-  assert.equal(s.requestStatus(orders[1].created.id,orders[1].p.statusToken).totalCents,1450);
+  assert.equal(s.requestStatus(orders[1].created.id,orders[1].p.statusToken).totalCents,1548);
   assert.equal(s.requests(admin).find(r=>r.id===orders[1].created.id).tip_cents,800);
   assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM assignment_emails').get().n,3);
   assert.throws(()=>s.createRequest({...request(quote(s)),tipCents:999}),e=>e.status===400);
@@ -96,4 +96,9 @@ test('Three separately priced requests can join one pickup before collection; ea
 test('Postal codes are separate, required, normalized and bound to the accepted quote',()=>{
  assert.equal(postalCode('h2x1y4'),'H2X 1Y4');assert.throws(()=>postalCode('12345'),e=>e.status===400);assert.throws(()=>postalCode(''),e=>e.status===400);
  const s=createStore(':memory:');try{const q=quote(s);assert.ok(q.pickup.endsWith('H2X 1Y4'));assert.ok(q.destination.endsWith('J4K 1A1'));assert.throws(()=>s.createRequest({...request(q),pickupPostalCode:'H3A 1A1'}),e=>e.status===409);assert.throws(()=>s.createRequest({...request(q),destinationPostalCode:''}),e=>e.status===400);}finally{s.db.close()}
+});
+
+test('TPS and TVQ are itemized on delivery fare; voluntary tips and courier commission exclude sales taxes',()=>{
+ assert.deepEqual(deliveryTaxes(1300),{subtotalCents:1300,gstCents:65,qstCents:130,totalWithTaxesCents:1495});
+ const split=splitDeliveryPrice(1300,800);assert.equal(split.totalPriceCents,2295);assert.equal(split.commissionCents,130);assert.equal(split.driverPayoutCents,1970);assert.equal(split.gstCents,65);assert.equal(split.qstCents,130);
 });

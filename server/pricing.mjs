@@ -12,9 +12,14 @@ export function priceRoute({distanceMeters,durationSeconds,baselineSeconds}) {
 }
 
 export const TIP_OPTIONS=[0,500,800,1200,1700];
-export function splitDeliveryPrice(totalCents,tipCents=0) {
+export function deliveryTaxes(subtotalCents) {
+  if(!Number.isSafeInteger(subtotalCents)||subtotalCents<0)throw Error('Invalid delivery subtotal');
+  const gstCents=Math.round(subtotalCents*5/100),qstCents=Math.round(subtotalCents*9975/100000);
+  return {subtotalCents,gstCents,qstCents,totalWithTaxesCents:subtotalCents+gstCents+qstCents};
+}
+export function splitDeliveryPrice(totalCents,tipCents=0,taxes=deliveryTaxes(totalCents)) {
   if(!Number.isSafeInteger(totalCents)||totalCents<0)throw Error('Invalid delivery price');
   if(!TIP_OPTIONS.includes(tipCents))throw Error('Invalid tip');
   const commissionCents=Math.round(totalCents*10/100);
-  return {deliveryFareCents:totalCents,tipCents,totalPriceCents:totalCents+tipCents,commissionCents,driverPayoutCents:totalCents-commissionCents+tipCents};
+  return {deliveryFareCents:totalCents,tipCents,gstCents:taxes.gstCents,qstCents:taxes.qstCents,totalPriceCents:totalCents+taxes.gstCents+taxes.qstCents+tipCents,commissionCents,driverPayoutCents:totalCents-commissionCents+tipCents};
 }

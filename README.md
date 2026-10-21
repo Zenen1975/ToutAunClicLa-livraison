@@ -76,3 +76,9 @@ Los avisos fallidos se reintentan hasta cinco veces con esperas crecientes; la c
 - SQLite añade tablas/columnas sin eliminar usuarios ni entregas. Mantener `DATABASE_PATH=/var/data/livraison.sqlite` con el disco persistente ya configurado.
 
 Validación: `cd server && npm test`. Las pruebas de rutas usan respuestas simuladas y nunca envían solicitudes reales de pago a Google ni mensajes SMTP. Después de configurar la clave, probar una cotización con direcciones reales y una solicitud de prueba antes del uso operativo.
+
+### Ajuste del formulario y tasas
+
+El bloque inicial de contacto se retiró: el nombre del restaurante está dentro de recogida. No se solicita correo ni teléfono/persona del restaurante; el teléfono y nombre del destinatario siguen siendo obligatorios. Los campos antiguos de contacto permanecen compatibles en la API para clientes anteriores. Las tarifas públicas se sustituyeron por un enlace `mailto:serviceclient@toutaunclicla.com` («Conoce nuestras tarifas» / «Découvrez nos tarifs»).
+
+La cotización muestra el subtotal de livraison y congestión, TPS 5 %, TVQ 9,975 %, propina voluntaria y total final. TPS y TVQ se calculan por separado sobre el subtotal antes de impuestos, redondeadas al centavo; la propina voluntaria se mantiene fuera de la base. Se guardan las tasas de cada cotización y entrega. La comisión del 10 % se calcula sobre la tarifa antes de impuestos; el repartidor conserva el 90 % de esa tarifa y toda la propina. El total del cliente incluye las tasas. Las cotizaciones no aceptadas de la versión anterior deben recalcularse; los pedidos ya aceptados conservan sus importes originales.

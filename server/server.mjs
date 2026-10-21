@@ -60,7 +60,7 @@ export const server=http.createServer(async(req,res)=>{
       const now=Date.now();
       if(now-requestWindow.start>60000)requestWindow={start:now,count:0};
       if(++requestWindow.count>120)throw new Problem(429,'Espera un minuto y vuelve a intentar / Réessayez dans une minute');
-      const key=typeof p.contactPhone==='string'?p.contactPhone.replace(/\D/g,'').slice(0,16):'';
+      const key=typeof p.contactPhone==='string'&&p.contactPhone.trim()?p.contactPhone.replace(/\D/g,'').slice(0,16):String(p.requesterName||'').trim().toLowerCase().slice(0,120)+'|'+String(p.pickupPostalCode||'').replace(/\s/g,'').toUpperCase().slice(0,6);
       if(requestAttempts.size>1000)for(const [k,v]of requestAttempts)if(now-v.start>600000)requestAttempts.delete(k);
       let a=requestAttempts.get(key);if(!a||now-a.start>600000){a={start:now,count:0};requestAttempts.set(key,a);}
       if(++a.count>10)throw new Problem(429,'Demasiadas solicitudes. Espera 10 minutos / Trop de demandes. Attendez 10 minutes');

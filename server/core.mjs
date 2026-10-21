@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
-import {priceRoute,splitDeliveryPrice,TIP_OPTIONS} from './pricing.mjs';
+import {priceRoute,splitDeliveryPrice,TIP_OPTIONS,deliveryTaxes} from './pricing.mjs';
 import {routeInput} from './addresses.mjs';
 
 export class Problem extends Error {
@@ -37,8 +37,9 @@ export function createStore(path = 'livraison.sqlite') {
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS delivery_requests_quote ON delivery_requests(quote_id)');
   if(!db.prepare('PRAGMA table_info(deliveries)').all().some(c=>c.name==='batch_id'))db.exec('ALTER TABLE deliveries ADD COLUMN batch_id TEXT');
   const deliveryColumns=new Set(db.prepare('PRAGMA table_info(deliveries)').all().map(c=>c.name));
-  for(const name of ['total_price_cents','commission_cents','driver_payout_cents','delivery_fare_cents','tip_cents'])if(!deliveryColumns.has(name))db.exec('ALTER TABLE deliveries ADD COLUMN '+name+' INTEGER');
+  for(const name of ['total_price_cents','commission_cents','driver_payout_cents','delivery_fare_cents','tip_cents','gst_cents','qst_cents'])if(!deliveryColumns.has(name))db.exec('ALTER TABLE deliveries ADD COLUMN '+name+' INTEGER');
   const quoteColumns=new Set(db.prepare('PRAGMA table_info(delivery_quotes)').all().map(c=>c.name));
+  for(const name of ['gst_cents','qst_cents','tax_version'])if(!quoteColumns.has(name))db.exec('ALTER TABLE delivery_quotes ADD COLUMN '+name+' INTEGER NOT NULL DEFAULT 0');
   for(const name of ['pickup_postal_code','destination_postal_code']){
     if(!requestColumns.has(name))db.exec('ALTER TABLE delivery_requests ADD COLUMN '+name+" TEXT NOT NULL DEFAULT ''");
     if(!quoteColumns.has(name))db.exec('ALTER TABLE delivery_quotes ADD COLUMN '+name+" TEXT NOT NULL DEFAULT ''");
@@ -122,9 +123,10 @@ export function createStore(path = 'livraison.sqlite') {
     saveQuote(p) {
       p={...p,...routeInput(p)};
       const priced=priceRoute(p),qid=id(),now=Date.now(),expiresAt=now+600000;
-      run(`INSERT INTO delivery_quotes(id,pickup,destination,ready_at,distance_meters,duration_seconds,baseline_seconds,distance_cents,traffic_cents,total_cents,expires_at,created_at,pickup_postal_code,destination_postal_code) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,qid,p.pickup,p.destination,p.readyAt,
-        priced.distanceMeters,priced.durationSeconds,priced.baselineSeconds,priced.distanceCents,priced.trafficCents,priced.totalCents,expiresAt,now,p.pickupPostalCode,p.destinationPostalCode);
-      return {quoteId:qid,pickup:p.pickup,destination:p.destination,pickupPostalCode:p.pickupPostalCode,destinationPostalCode:p.destinationPostalCode,readyAt:p.readyAt,...priced,expiresAt};
+      const taxes=deliveryTaxes(priced.totalCents);
+      run(`INSERT INTO delivery_quotes(id,pickup,destination,ready_at,distance_meters,duration_seconds,baseline_seconds,distance_cents,traffic_cents,total_cents,expires_at,created_at,pickup_postal_code,destination_postal_code,gst_cents,qst_cents,tax_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,qid,p.pickup,p.destination,p.readyAt,
+        priced.distanceMeters,priced.durationSeconds,priced.baselineSeconds,priced.distanceCents,priced.trafficCents,priced.totalCents,expiresAt,now,p.pickupPostalCode,p.destinationPostalCode,taxes.gstCents,taxes.qstCents,1);
+      return {quoteId:qid,pickup:p.pickup,destination:p.destination,pickupPostalCode:p.pickupPostalCode,destinationPostalCode:p.destinationPostalCode,readyAt:p.readyAt,...priced,subtotalCents:priced.totalCents,gstCents:taxes.gstCents,qstCents:taxes.qstCents,totalCents:taxes.totalWithTaxesCents,expiresAt};
     },
     createRequest(p) {
       fail(p.consent!==true,400,'Autoriza el uso de los datos para organizar la entrega / Autorisez l’utilisation des coordonnées pour organiser la livraison');
@@ -139,35 +141,37 @@ export function createStore(path = 'livraison.sqlite') {
       p={...p,...routeInput(p)};
       const tipCents=p.tipCents??0;
       fail(!TIP_OPTIONS.includes(tipCents),400,'Propina incorrecta / Pourboire invalide');
-      const fields={requesterName:120,contactName:100,contactPhone:40,pickup:500,destination:500,recipientName:100,recipientPhone:40,itemDescription:500};
+      const fields={requesterName:120,pickup:500,destination:500,recipientName:100,recipientPhone:40,itemDescription:500};
       for(const [key,max] of Object.entries(fields))fail(typeof p[key]!=='string'||!p[key].trim()||p[key].length>max,400,'Completa los campos obligatorios / Remplissez les champs obligatoires');
-      for(const key of ['contactPhone','recipientPhone'])fail(!/^[+()\d .-]+$/.test(p[key])||p[key].replace(/\D/g,'').length<7||p[key].replace(/\D/g,'').length>15,400,'Teléfono incorrecto / Téléphone invalide');
+      const contactName=p.contactName??p.requesterName,contactPhone=p.contactPhone??'';
+      fail(typeof contactName!=='string'||contactName.length>120||typeof contactPhone!=='string'||contactPhone.length>40,400,'Datos de contacto incorrectos / Coordonnées invalides');
+      for(const phone of [contactPhone,p.recipientPhone].filter(Boolean))fail(!/^[+()\d .-]+$/.test(phone)||phone.replace(/\D/g,'').length<7||phone.replace(/\D/g,'').length>15,400,'Teléfono incorrecto / Téléphone invalide');
       const email=p.contactEmail??'',notes=p.notes??'',ready=p.readyAt??'';
       fail(typeof email!=='string'||email.length>254||(email.trim()&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())),400,'Correo incorrecto / Courriel invalide');
       fail(typeof notes!=='string'||notes.length>1000,400,'Instrucciones: máximo 1000 caracteres / Instructions : 1000 caractères maximum');
       fail(typeof ready!=='string'||(ready&&(!Number.isFinite(Date.parse(ready))||Date.parse(ready)<Date.now()-900000||Date.parse(ready)>Date.now()+30*86400000)),400,'Fecha de recogida incorrecta / Date de collecte invalide');
       const quote=one('SELECT * FROM delivery_quotes WHERE id=?',typeof p.quoteId==='string'?p.quoteId:'');
-      fail(!quote||quote.expires_at<Date.now(),409,'Cotización vencida. Calcula el precio nuevamente / Devis expiré. Recalculez le prix');
+      fail(!quote||quote.expires_at<Date.now()||quote.tax_version!==1,409,'Cotización vencida. Calcula el precio nuevamente / Devis expiré. Recalculez le prix');
       fail(quote.pickup!==p.pickup.trim()||quote.destination!==p.destination.trim()||quote.ready_at!==(ready?new Date(ready).toISOString():''),409,'La ruta cambió. Calcula el precio nuevamente / Le trajet a changé. Recalculez le prix');
       fail(quote.pickup_postal_code!==p.pickupPostalCode||quote.destination_postal_code!==p.destinationPostalCode,409,'El código postal cambió. Calcula nuevamente / Code postal modifié. Recalculez le prix');
       fail(!!one('SELECT id FROM delivery_requests WHERE quote_id=?',quote.id),409,'Cotización ya aceptada / Devis déjà accepté');
       const rid=id();
       run(`INSERT INTO delivery_requests(id,submission_id,requester_name,contact_name,contact_phone,contact_email,
         pickup,destination,recipient_name,recipient_phone,item_description,ready_at,notes,created_at,quote_id,status_token_hash,accepted_at,tip_cents,pickup_postal_code,destination_postal_code) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        rid,p.submissionId,p.requesterName.trim(),p.contactName.trim(),p.contactPhone.trim(),email.trim(),p.pickup.trim(),p.destination.trim(),
+        rid,p.submissionId,p.requesterName.trim(),contactName.trim(),contactPhone.trim(),email.trim(),p.pickup.trim(),p.destination.trim(),
         p.recipientName.trim(),p.recipientPhone.trim(),p.itemDescription.trim(),ready?new Date(ready).toISOString():'',notes.trim(),Date.now(),quote.id,hash(p.statusToken),Date.now(),tipCents,p.pickupPostalCode,p.destinationPostalCode);
       return {id:rid,reference:'TAC-'+rid.slice(0,12).toUpperCase()};
     },
     requestStatus(rid,token) {
-      const r=one(`SELECT r.id,r.status,r.status_token_hash,r.tip_cents,d.status AS delivery_status,u.name AS driver_name,q.total_cents
+      const r=one(`SELECT r.id,r.status,r.status_token_hash,r.tip_cents,d.status AS delivery_status,u.name AS driver_name,q.total_cents,q.gst_cents,q.qst_cents
         FROM delivery_requests r LEFT JOIN deliveries d ON d.id=r.delivery_id LEFT JOIN users u ON u.id=d.driver_id
         LEFT JOIN delivery_quotes q ON q.id=r.quote_id WHERE r.id=?`,rid);
       fail(!r||!r.status_token_hash||r.status_token_hash!==hash(token||''),404,'Solicitud no encontrada / Demande introuvable');
-      return {reference:'TAC-'+r.id.slice(0,12).toUpperCase(),status:r.status==='assigned'?r.delivery_status:r.status,driverName:r.driver_name||'',deliveryFareCents:r.total_cents,tipCents:r.tip_cents,totalCents:r.total_cents+r.tip_cents,currency:'CAD'};
+      return {reference:'TAC-'+r.id.slice(0,12).toUpperCase(),status:r.status==='assigned'?r.delivery_status:r.status,driverName:r.driver_name||'',deliveryFareCents:r.total_cents,gstCents:r.gst_cents,qstCents:r.qst_cents,tipCents:r.tip_cents,totalCents:r.total_cents+r.gst_cents+r.qst_cents+r.tip_cents,currency:'CAD'};
     },
     requests(u) {
       admin(u);
-      return db.prepare(`SELECT r.*,d.status AS delivery_status,d.commission_cents,d.driver_payout_cents,q.total_cents,q.distance_meters,q.distance_cents,q.traffic_cents,q.duration_seconds,q.baseline_seconds
+      return db.prepare(`SELECT r.*,d.status AS delivery_status,d.commission_cents,d.driver_payout_cents,q.total_cents,q.gst_cents,q.qst_cents,q.distance_meters,q.distance_cents,q.traffic_cents,q.duration_seconds,q.baseline_seconds
         FROM delivery_requests r LEFT JOIN deliveries d ON d.id=r.delivery_id LEFT JOIN delivery_quotes q ON q.id=r.quote_id
         ORDER BY CASE WHEN r.status='pending' THEN 0 ELSE 1 END,r.created_at DESC`).all().map(({submission_id,status_token_hash,...r})=>({...r,reference:'TAC-'+r.id.slice(0,12).toUpperCase()}));
     },
@@ -194,11 +198,11 @@ export function createStore(path = 'livraison.sqlite') {
       const joining=d.status!=='available';
       if(joining)fail(!request||p.joinBatch!==true||!d.batch||d.batch.count>=3||same(d.batch.pickup)!==same(request.pickup)||same(d.batch.requesterName)!==same(request.requester_name),409,'Repartidor ocupado o grupo incompatible / Livreur occupé ou tournée incompatible');
       const did=id(), now=Date.now();
-      const quote=request?one('SELECT total_cents FROM delivery_quotes WHERE id=?',request.quote_id):null;
-      const split=quote?splitDeliveryPrice(quote.total_cents,request.tip_cents):null;
+      const quote=request?one('SELECT total_cents,gst_cents,qst_cents FROM delivery_quotes WHERE id=?',request.quote_id):null;
+      const split=quote?splitDeliveryPrice(quote.total_cents,request.tip_cents,{gstCents:quote.gst_cents,qstCents:quote.qst_cents}):null;
       db.exec('BEGIN IMMEDIATE');
       try {
-        run('INSERT INTO deliveries(id,pickup,destination,driver_id,created_at,batch_id,total_price_cents,commission_cents,driver_payout_cents,delivery_fare_cents,tip_cents) VALUES(?,?,?,?,?,?,?,?,?,?,?)',did,p.pickup.trim(),p.destination.trim(),p.driverId,now,joining?d.batch.id:did,split?.totalPriceCents??null,split?.commissionCents??null,split?.driverPayoutCents??null,split?.deliveryFareCents??null,split?.tipCents??null);
+        run('INSERT INTO deliveries(id,pickup,destination,driver_id,created_at,batch_id,total_price_cents,commission_cents,driver_payout_cents,delivery_fare_cents,tip_cents,gst_cents,qst_cents) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',did,p.pickup.trim(),p.destination.trim(),p.driverId,now,joining?d.batch.id:did,split?.totalPriceCents??null,split?.commissionCents??null,split?.driverPayoutCents??null,split?.deliveryFareCents??null,split?.tipCents??null,split?.gstCents??null,split?.qstCents??null);
         run('INSERT INTO assignment_emails(delivery_id,next_attempt_at) VALUES(?,?)',did,now);
         if(request){
           const changed=run("UPDATE delivery_requests SET status='assigned',delivery_id=?,reviewed_at=? WHERE id=? AND status='pending'",did,now,request.id);
