@@ -57,6 +57,10 @@ export const server=http.createServer(async(req,res)=>{
     else if(req.method==='POST'&&path==='/shift/stop')data=store.stop(u);
     else if(req.method==='POST'&&path==='/location')data=store.locate(u,p);
     else if(req.method==='GET'&&path==='/drivers')data=store.drivers(u);
+    else if(req.method==='GET'&&path==='/driver/map-config'){
+      if(u.role!=='driver')throw new Problem(403,'Acceso denegado');
+      data={mapsKey:process.env.GOOGLE_MAPS_EMBED_KEY || process.env.GOOGLE_MAPS_BROWSER_KEY || ''};
+    }
     else if(req.method==='GET'&&path==='/config'){
       if(u.role!=='admin')throw new Problem(403,'Acceso denegado');
       data={mapsKey:process.env.GOOGLE_MAPS_BROWSER_KEY || ''};

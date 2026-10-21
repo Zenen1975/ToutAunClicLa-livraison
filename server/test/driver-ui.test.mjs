@@ -3,45 +3,71 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 
-test('Driver map includes pickup before delivery and advances after collection in both languages',()=>{
+test('Driver map stays in panel, preserves stop order and uses only consented fresh GPS',async()=>{
   const s=setup();
-  const pickup='123 Rue de l’Église, Montréal & Laval';
-  const destination='456 Avenue du Parc #2, Longueuil';
-  s.evaluate('jobs='+JSON.stringify([{id:'map-job',status:'assigned',pickup,destination}]));
+  const pickup='123 Rue de l’Église, Montréal & Laval',destination='456 Avenue du Parc #2, Longueuil';
+  s.evaluate("token='test-token';jobs="+JSON.stringify([{id:'map-job',status:'assigned',pickup,destination}]));
   for(const lang of ['es','fr']){
     s.evaluate("lang='"+lang+"';renderJobs()");
     const card=s.nodes.get('jobs').children[0];
-    const links=card.children.filter(n=>n.href);
-    assert.equal(links.length,3);
-    const full=new URL(links[0].href);
-    assert.equal(full.origin,'https://www.google.com');
-    assert.equal(full.searchParams.get('destination'),destination);
-    assert.equal(full.searchParams.get('waypoints'),pickup);
-    assert.equal(full.searchParams.has('origin'),false);
-    assert.equal(full.searchParams.get('travelmode'),'driving');
-    assert.equal(new URL(links[1].href).searchParams.get('destination'),pickup);
-    assert.equal(new URL(links[2].href).searchParams.get('destination'),destination);
-    assert.match(links[0].textContent,lang==='es'?/recogida y entrega/:/collecte et livraison/);
-    for(const link of links)assert.equal(link.target,'_blank');
+    const buttons=card.children.filter(n=>n.onclick);
+    assert.equal(buttons.length,4);
+    assert.equal(card.children.some(n=>n.href),false);
+    await buttons[0].onclick();
+    let frame=s.nodes.get('routeCanvas').children[0];
+    let url=new URL(frame.src);
+    assert.equal(url.pathname,'/maps/embed/v1/directions');
+    assert.equal(url.searchParams.get('origin'),pickup);
+    assert.equal(url.searchParams.get('destination'),destination);
+    assert.equal(url.searchParams.get('language'),lang);
+    assert.equal(frame.referrerPolicy,'strict-origin-when-cross-origin');
+    s.evaluate("tracking=true;lastSent=Date.now();lastPosition={latitude:45.5,longitude:-73.5}");
+    await buttons[0].onclick();
+    url=new URL(s.nodes.get('routeCanvas').children[0].src);
+    assert.equal(url.searchParams.get('origin'),'45.5,-73.5');
+    assert.equal(url.searchParams.get('waypoints'),pickup);
+    await buttons[1].onclick();
+    url=new URL(s.nodes.get('routeCanvas').children[0].src);
+    assert.equal(url.searchParams.get('destination'),pickup);
+    assert.equal(url.searchParams.has('waypoints'),false);
+    s.evaluate('lastSent=Date.now()-61000');
+    await buttons[1].onclick();
+    url=new URL(s.nodes.get('routeCanvas').children[0].src);
+    assert.equal(url.pathname,'/maps/embed/v1/place');
+    assert.equal(url.searchParams.get('q'),pickup);
+    s.evaluate('tracking=false');
   }
   s.evaluate("jobs[0].status='picked_up';renderJobs()");
-  const deliveryLinks=s.nodes.get('jobs').children[0].children.filter(n=>n.href);
-  assert.equal(deliveryLinks.length,1);
-  const deliveryUrl=new URL(deliveryLinks[0].href);
-  assert.equal(deliveryUrl.searchParams.get('destination'),destination);
-  assert.equal(deliveryUrl.searchParams.has('waypoints'),false);
-  assert.equal(deliveryUrl.searchParams.get('dir_action'),'navigate');
-  s.evaluate("jobs[0].status='delivered';renderJobs()");
-  assert.equal(s.nodes.get('jobs').children.some(n=>n.className==='job'),false);
+  const buttons=s.nodes.get('jobs').children[0].children.filter(n=>n.onclick);
+  assert.equal(buttons.length,2);
+  await buttons[0].onclick();
+  const url=new URL(s.nodes.get('routeCanvas').children[0].src);
+  assert.equal(url.searchParams.get('destination'),destination);
+  assert.equal(url.searchParams.has('waypoints'),false);
+  assert.equal(new URL(s.nodes.get('externalMap').href).searchParams.has('dir_action'),false);
+  s.evaluate('reset()');
+  assert.equal(s.nodes.get('routeCanvas').children.length,0);
+});
+test('Missing map config and closing a loading map do not redirect the driver',async()=>{
+  const s=setup();
+  s.evaluate("token='test-token';fetch=async()=>({ok:true,json:async()=>({mapsKey:''})})");
+  await s.evaluate("showMap({id:'one',pickup:'A',destination:'B',status:'assigned'},'full')");
+  assert.match(s.nodes.get('mapNote').textContent,/Maps Embed API/);
+  assert.equal(s.nodes.get('routeCanvas').children.length,0);
+  s.evaluate("fetch=()=>new Promise(resolve=>window.finishMap=()=>resolve({ok:true,json:async()=>({mapsKey:'test-key'})}))");
+  const pending=s.evaluate("showMap({id:'one',pickup:'A',destination:'B',status:'assigned'},'full')");
+  s.evaluate('closeMap();window.finishMap()');
+  await pending;
+  assert.equal(s.nodes.get('routeCanvas').children.length,0);
 });
 
 // Exercise the delivered script with browser API substitutes; real-device GPS remains a deployment check.
 function setup(){
   const nodes=new Map(),events={},calls=[];let locks=0,releases=0,deny=false,plays=0,pauses=0,audioBlocked=false;
-  function node(){const classes=new Set();return {textContent:'',checked:false,disabled:false,value:'',dataset:{},children:[],classList:{add:c=>classes.add(c),remove:c=>classes.delete(c),toggle(c,on){on?classes.add(c):classes.delete(c)}},append(...items){this.children.push(...items)},replaceChildren(){this.children=[]},addEventListener(){},querySelector(){return node()}}}
+  function node(){const classes=new Set();return {textContent:'',checked:false,disabled:false,value:'',dataset:{},children:[],classList:{add:c=>classes.add(c),remove:c=>classes.delete(c),toggle(c,on){on?classes.add(c):classes.delete(c)}},append(...items){this.children.push(...items)},replaceChildren(){this.children=[]},addEventListener(){},scrollIntoView(){},removeAttribute(name){delete this[name]},querySelector(){return node()}}}
   const document={hidden:false,documentElement:{},getElementById(id){if(!nodes.has(id))nodes.set(id,node());return nodes.get(id)},querySelectorAll(){return []},createElement:node,addEventListener:(n,fn)=>events[n]=fn};
   document.getElementById('keepScreen').checked=true;
-  const context=vm.createContext({document,window:{addEventListener:(n,fn)=>events[n]=fn},navigator:{language:'es',geolocation:{getCurrentPosition(ok,no){deny?no({code:1}):ok({coords:{latitude:45.5,longitude:-73.5,accuracy:5},timestamp:Date.now()})}},wakeLock:{async request(){locks++;let callback;return {released:false,addEventListener(n,fn){callback=fn},async release(){this.released=true;releases++;callback?.()}}}}},Date,Error,Promise,AbortSignal,encodeURIComponent,setInterval:()=>1,clearInterval(){},fetch:async(path,options)=>{calls.push({path,options});return {ok:true,status:200,json:async()=>path==='/shift/start'?{shiftId:'test-shift'}:path==='/deliveries'?[]:{ok:true}}}});
+  const context=vm.createContext({document,window:{addEventListener:(n,fn)=>events[n]=fn},navigator:{language:'es',geolocation:{getCurrentPosition(ok,no){deny?no({code:1}):ok({coords:{latitude:45.5,longitude:-73.5,accuracy:5},timestamp:Date.now()})}},wakeLock:{async request(){locks++;let callback;return {released:false,addEventListener(n,fn){callback=fn},async release(){this.released=true;releases++;callback?.()}}}}},Date,Error,Promise,AbortSignal,encodeURIComponent,setInterval:()=>1,clearInterval(){},fetch:async(path,options)=>{calls.push({path,options});return {ok:true,status:200,json:async()=>path==='/shift/start'?{shiftId:'test-shift'}:path==='/deliveries'?[]:path==='/driver/map-config'?{mapsKey:'test-key'}:{ok:true}}}});
   const html=readFileSync(new URL('../public/livreur.html',import.meta.url),'utf8');vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],context);
   class Audio{
     constructor(src){this.src=src;this.currentTime=0;this.paused=true}
