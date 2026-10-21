@@ -86,3 +86,11 @@ La cotización muestra el subtotal de livraison y congestión, TPS 5 %, TVQ 9,97
 ### Asignación directa con precio desde administración
 
 El formulario del administrador solicita direcciones y códigos postales, calcula el precio con Routes API y muestra TPS/TVQ, propina, total y reparto interno. Se confirma el precio antes de asignar. `POST /admin/quotes` requiere administrador; `POST /deliveries` sin solicitud exige `quoteId`, direcciones coincidentes y `acceptPrice: true`. La cotización vence a los 10 minutos. Los reintentos con la misma cotización, repartidor y propina recuperan la entrega existente sin duplicar la notificación. Las entregas antiguas sin precio conservan sus datos.
+
+### Avisos de nuevas solicitudes
+
+Cada solicitud pública confirmada guarda un aviso en `request_emails` dentro de la misma transacción. El servidor intenta enviarlo inmediatamente y revisa la cola cada 30 segundos, aunque ningún navegador esté conectado. Usa las variables SMTP existentes y `PUBLIC_APP_URL`. El destinatario aprobado por defecto es `serviceclient@toutaunclicla.com`; se puede sustituir con `REQUEST_NOTIFICATION_EMAIL`. `REQUEST_EMAIL_ENABLED=false` desactiva estos avisos, independientemente de `ASSIGNMENT_EMAIL_ENABLED`. No se envían correos al calcular solamente una cotización ni se crean avisos para las solicitudes anteriores a esta actualización.
+
+El correo FR/ES incluye referencia, restaurante o cliente, recogida, destino, contenido, horario, precio confirmado con impuestos y propina, y enlace al panel que exige acceso administrador. No incluye contraseñas ni tokens de seguimiento. El correo de asignación al livreur incluye sus direcciones, importe y propina.
+
+Los avisos de solicitudes pendientes se reintentan hasta cinco veces con espera creciente y un identificador de mensaje estable. Las solicitudes procesadas o de más de 24 horas se omiten. Una interrupción después de la aceptación SMTP puede causar un duplicado; la aceptación SMTP tampoco garantiza recepción en la bandeja de entrada. «Comprobar correo» muestra por separado los contadores de avisos de solicitudes y asignaciones. La configuración se indica en el panel; comprobar la primera recepción real antes de depender de los avisos. Las pruebas utilizan emisores simulados y desactivan expresamente ambos envíos en los tests HTTP, incluso durante el build de Render.

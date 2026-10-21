@@ -14,9 +14,13 @@ export function emailConfig(env=process.env) {
 
 export function assignmentMessage(job,config) {
   const url=config.appUrl+'/livreur';
-  const text=`Bonjour ${job.name},\nUne nouvelle livraison vous a été assignée.\nCollecte : ${job.pickup}\nLivraison : ${job.destination}\nOuvrez votre espace livreur pour consulter la livraison : ${url}\n\nHola ${job.name},\nTienes una nueva entrega asignada.\nRecogida: ${job.pickup}\nDestino: ${job.destination}\nAbre tu panel de repartidor para consultar la entrega: ${url}\n\nTout à un clic là`;
+  const money=c=>new Intl.NumberFormat('fr-CA',{style:'currency',currency:'CAD'}).format(c/100)+' CAD';
+  const earnings=job.driver_payout_cents==null?'':money(job.driver_payout_cents-(job.tip_cents||0))+' + '+money(job.tip_cents||0);
+  const earningsFr=earnings?'Votre livraison : '+earnings+' de pourboire. Taxes incluses.':'';
+  const earningsEs=earnings?'Tu entrega: '+earnings+' de propina. Tasas incluidas.':'';
+  const text=`Bonjour ${job.name},\nUne nouvelle livraison vous a été assignée.\nCollecte : ${job.pickup}\nLivraison : ${job.destination}\n${earningsFr}\nOuvrez votre espace livreur pour consulter la livraison : ${url}\n\nHola ${job.name},\nTienes una nueva entrega asignada.\nRecogida: ${job.pickup}\nDestino: ${job.destination}\n${earningsEs}\nAbre tu panel de repartidor para consultar la entrega: ${url}\n\nTout à un clic là`;
   const h=escapeHtml;
-  const block=(lang,title,greeting,pickup,destination,button)=>`<section lang="${lang}"><h2 style="color:#572794">${title}</h2><p>${greeting} ${h(job.name)},</p><p><strong>${pickup}</strong><br>${h(job.pickup)}</p><p><strong>${destination}</strong><br>${h(job.destination)}</p><p><a href="${h(url)}" style="display:inline-block;background:#6332a0;color:#fff;text-decoration:none;padding:14px 22px;border-radius:8px">${button}</a></p></section>`;
+  const block=(lang,title,greeting,pickup,destination,button)=>`<section lang="${lang}"><h2 style="color:#572794">${title}</h2><p>${greeting} ${h(job.name)},</p><p><strong>${pickup}</strong><br>${h(job.pickup)}</p><p><strong>${destination}</strong><br>${h(job.destination)}</p>${earnings?'<p><strong>'+h(lang==='fr'?earningsFr:earningsEs)+'</strong></p>':''}<p><a href="${h(url)}" style="display:inline-block;background:#6332a0;color:#fff;text-decoration:none;padding:14px 22px;border-radius:8px">${button}</a></p></section>`;
   return {from:{name:'Tout à un clic là · Livraison',address:config.from},to:{name:job.name,address:job.email},
     subject:'Nouvelle livraison assignée / Nueva entrega asignada · ToutAunClicLa',
     messageId:`<assignment-${job.delivery_id}@${config.from.split('@')[1]}>`,text,
@@ -42,7 +46,7 @@ export function createAssignmentMailer(store,{env=process.env,send,now=Date.now,
       // Never send an old assignment or one the driver has already collected.
       store.db.prepare(`UPDATE assignment_emails SET skipped_at=? WHERE sent_at IS NULL AND skipped_at IS NULL
         AND delivery_id IN (SELECT id FROM deliveries WHERE status!='assigned' OR created_at<?)`).run(at,at-86400000);
-      const jobs=store.db.prepare(`SELECT e.*,d.pickup,d.destination,u.name,u.email FROM assignment_emails e
+      const jobs=store.db.prepare(`SELECT e.*,d.pickup,d.destination,d.driver_payout_cents,d.tip_cents,u.name,u.email FROM assignment_emails e
         JOIN deliveries d ON d.id=e.delivery_id JOIN users u ON u.id=d.driver_id
         WHERE e.sent_at IS NULL AND e.skipped_at IS NULL AND e.attempts<5 AND e.next_attempt_at<=? ORDER BY d.created_at LIMIT 5`).all(at);
       for(const job of jobs){

@@ -32,6 +32,8 @@ export function createStore(path = 'livraison.sqlite') {
   db.exec(`CREATE TABLE IF NOT EXISTS delivery_quotes(id TEXT PRIMARY KEY,pickup TEXT NOT NULL,destination TEXT NOT NULL,
     ready_at TEXT NOT NULL,distance_meters INTEGER NOT NULL,duration_seconds REAL NOT NULL,baseline_seconds REAL NOT NULL,
     distance_cents INTEGER NOT NULL,traffic_cents INTEGER NOT NULL,total_cents INTEGER NOT NULL,expires_at INTEGER NOT NULL,created_at INTEGER NOT NULL);`);
+  db.exec(`CREATE TABLE IF NOT EXISTS request_emails(request_id TEXT PRIMARY KEY REFERENCES delivery_requests(id),
+    attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL,sent_at INTEGER,skipped_at INTEGER,last_error TEXT);`);
   const requestColumns=new Set(db.prepare('PRAGMA table_info(delivery_requests)').all().map(c=>c.name));
   for(const [name,type]of [['quote_id','TEXT REFERENCES delivery_quotes(id)'],['status_token_hash','TEXT'],['accepted_at','INTEGER'],['tip_cents','INTEGER NOT NULL DEFAULT 0']])if(!requestColumns.has(name))db.exec('ALTER TABLE delivery_requests ADD COLUMN '+name+' '+type);
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS delivery_requests_quote ON delivery_requests(quote_id)');
@@ -159,10 +161,15 @@ export function createStore(path = 'livraison.sqlite') {
       fail(quote.pickup_postal_code!==p.pickupPostalCode||quote.destination_postal_code!==p.destinationPostalCode,409,'El código postal cambió. Calcula nuevamente / Code postal modifié. Recalculez le prix');
       fail(!!one('SELECT id FROM delivery_requests WHERE quote_id=?',quote.id),409,'Cotización ya aceptada / Devis déjà accepté');
       const rid=id();
+      db.exec('BEGIN IMMEDIATE');
+      try {
       run(`INSERT INTO delivery_requests(id,submission_id,requester_name,contact_name,contact_phone,contact_email,
         pickup,destination,recipient_name,recipient_phone,item_description,ready_at,notes,created_at,quote_id,status_token_hash,accepted_at,tip_cents,pickup_postal_code,destination_postal_code) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         rid,p.submissionId,p.requesterName.trim(),contactName.trim(),contactPhone.trim(),email.trim(),p.pickup.trim(),p.destination.trim(),
         p.recipientName.trim(),p.recipientPhone.trim(),p.itemDescription.trim(),ready?new Date(ready).toISOString():'',notes.trim(),Date.now(),quote.id,hash(p.statusToken),Date.now(),tipCents,p.pickupPostalCode,p.destinationPostalCode);
+        run('INSERT INTO request_emails(request_id,next_attempt_at) VALUES(?,?)',rid,Date.now());
+        db.exec('COMMIT');
+      }catch(error){db.exec('ROLLBACK');throw error;}
       return {id:rid,reference:'TAC-'+rid.slice(0,12).toUpperCase()};
     },
     requestStatus(rid,token) {

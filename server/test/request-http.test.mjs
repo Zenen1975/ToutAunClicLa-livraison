@@ -7,7 +7,7 @@ import {randomUUID} from 'node:crypto';
 import {createStore} from '../core.mjs';
 
 test('HTTP quote → accepted price and tip → admin assignment → restaurant status and driver earnings is private and durable',async()=>{
- const dir=mkdtempSync(join(tmpdir(),'tacl-request-http-'));process.env.DATABASE_PATH=join(dir,'test.sqlite');process.env.ASSIGNMENT_EMAIL_ENABLED='false';process.env.GOOGLE_ROUTES_API_KEY='test-only-key';
+ const dir=mkdtempSync(join(tmpdir(),'tacl-request-http-'));process.env.DATABASE_PATH=join(dir,'test.sqlite');process.env.ASSIGNMENT_EMAIL_ENABLED='false';process.env.REQUEST_EMAIL_ENABLED='false';process.env.GOOGLE_ROUTES_API_KEY='test-only-key';
  const store=createStore(process.env.DATABASE_PATH),password='test-password-123';
  const admin=store.createUser({name:'Admin',email:'admin@example.test',password,role:'admin'}),driver=store.createUser({name:'Driver',email:'driver@example.test',password});
  const realFetch=globalThis.fetch;
@@ -25,7 +25,7 @@ test('HTTP quote → accepted price and tip → admin assignment → restaurant 
   const {contactPhone:removedPhone,...requestRoute}=route;
   const body={...requestRoute,quoteId:q.data.quoteId,consent:true,acceptPrice:true,tipCents:500,submissionId:randomUUID(),statusToken:'cd'.repeat(32),requesterName:'Restaurant',recipientName:'Recipient',recipientPhone:'4505550101',itemDescription:'Repas'};
   assert.equal((await api('/requests',{body:{...body,acceptPrice:false}})).status,400);
-  const accepted=await api('/requests',{body});assert.equal(accepted.status,201);assert.deepEqual((await api('/requests',{body})).data,accepted.data);
+  const accepted=await api('/requests',{body});assert.equal(accepted.status,201);assert.deepEqual((await api('/requests',{body})).data,accepted.data);assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM request_emails').get().n,1);
   const statusPath='/request-status/'+accepted.data.id;
   assert.equal((await api(statusPath)).status,404);assert.equal((await api(statusPath,{token:'wrong'})).status,404);
   const pending=await api(statusPath,{token:body.statusToken});assert.equal(pending.data.status,'pending');assert.equal(pending.data.totalCents,2105);assert.ok(!JSON.stringify(pending).includes(body.recipientPhone));

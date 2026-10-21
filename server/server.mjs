@@ -5,8 +5,10 @@ import {createStore,Problem} from './core.mjs';
 import {createAssignmentMailer} from './assignment-mail.mjs';
 import {checkEmail} from './email-check.mjs';
 import {computeQuote} from './routes.mjs';
+import {createRequestMailer} from './request-mail.mjs';
 const store=createStore(process.env.DATABASE_PATH || 'livraison.sqlite');
 const mailer=createAssignmentMailer(store);
+const requestMailer=createRequestMailer(store);
 const page=readFileSync(new URL('./public/index.html',import.meta.url));
 const driverPage=readFileSync(new URL('./public/livreur.html',import.meta.url));
 const requestPage=readFileSync(new URL('./public/demander.html',import.meta.url));
@@ -65,7 +67,7 @@ export const server=http.createServer(async(req,res)=>{
       let a=requestAttempts.get(key);if(!a||now-a.start>600000){a={start:now,count:0};requestAttempts.set(key,a);}
       if(++a.count>10)throw new Problem(429,'Demasiadas solicitudes. Espera 10 minutos / Trop de demandes. Attendez 10 minutes');
       if(path==='/quotes')send(201,store.saveQuote(await computeQuote(p)));
-      else send(201,store.createRequest(p));
+      else {send(201,store.createRequest(p));void requestMailer.flush();}
       return;
     }
     const token=(req.headers.authorization || '').replace(/^Bearer /,'');
@@ -82,13 +84,17 @@ export const server=http.createServer(async(req,res)=>{
     else if(req.method==='GET'&&path==='/drivers')data=store.drivers(u);
     else if(req.method==='GET'&&path==='/config'){
       if(u.role!=='admin')throw new Problem(403,'Acceso denegado');
-      data={mapsKey:process.env.GOOGLE_MAPS_BROWSER_KEY || '',quotesConfigured:!!process.env.GOOGLE_ROUTES_API_KEY?.trim()};
+      data={mapsKey:process.env.GOOGLE_MAPS_BROWSER_KEY || '',quotesConfigured:!!process.env.GOOGLE_ROUTES_API_KEY?.trim(),requestNotifications:requestMailer.status()};
     }
     else if(req.method==='POST'&&path==='/email/check'){
       if(u.role!=='admin')throw new Problem(403,'Acceso denegado / Accès refusé');
       if(Date.now()<nextEmailCheck)throw new Problem(429,'Espera un minuto antes de volver a comprobar / Attendez une minute');
       nextEmailCheck=Date.now()+60000;
       data=await checkEmail();
+      data.requestNotifications={...requestMailer.status(),queue:store.db.prepare(`SELECT
+        SUM(CASE WHEN sent_at IS NOT NULL THEN 1 ELSE 0 END) AS sent,
+        SUM(CASE WHEN sent_at IS NULL AND skipped_at IS NULL AND attempts<5 THEN 1 ELSE 0 END) AS pending,
+        SUM(CASE WHEN sent_at IS NULL AND skipped_at IS NULL AND attempts>=5 THEN 1 ELSE 0 END) AS failed FROM request_emails`).get()};
       data.queue=store.db.prepare(`SELECT
         SUM(CASE WHEN sent_at IS NOT NULL THEN 1 ELSE 0 END) AS sent,
         SUM(CASE WHEN sent_at IS NULL AND skipped_at IS NULL AND attempts<5 THEN 1 ELSE 0 END) AS pending,
@@ -122,7 +128,7 @@ export const server=http.createServer(async(req,res)=>{
     send(200,data);
   }catch(e){send(e.status || 500,{error:e.status?e.message:'Error del servidor / Erreur serveur'});if(!e.status)console.error(e);}
 });
-server.on('listening',()=>mailer.start());
-server.on('close',()=>mailer.stop());
+server.on('listening',()=>{mailer.start();requestMailer.start()});
+server.on('close',()=>{mailer.stop();requestMailer.stop()});
 if(process.argv[1]===fileURLToPath(import.meta.url))server.listen(Number(process.env.PORT || 8787),process.env.HOST || '127.0.0.1',()=>console.log('Panel: http://127.0.0.1:'+ (process.env.PORT || 8787)));
 
