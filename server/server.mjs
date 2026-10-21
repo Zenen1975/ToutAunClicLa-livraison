@@ -8,6 +8,7 @@ const store=createStore(process.env.DATABASE_PATH || 'livraison.sqlite');
 const mailer=createAssignmentMailer(store);
 const page=readFileSync(new URL('./public/index.html',import.meta.url));
 const driverPage=readFileSync(new URL('./public/livreur.html',import.meta.url));
+const jingle=readFileSync(new URL('./public/assignment-jingle.mp3',import.meta.url));
 const attempts=new Map();
 let nextEmailCheck=0;
 export const server=http.createServer(async(req,res)=>{
@@ -19,6 +20,20 @@ export const server=http.createServer(async(req,res)=>{
     const path=new URL(req.url,'http://localhost').pathname;
     if(req.method==='GET'&&path==='/'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(page);return;}
     if(req.method==='GET'&&['/livreur','/livreur/','/repartidor','/repartidor/'].includes(path)){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(driverPage);return;}
+    if(['GET','HEAD'].includes(req.method)&&path==='/assignment-jingle.mp3'){
+      const headers={'Content-Type':'audio/mpeg','Accept-Ranges':'bytes','Cache-Control':'public, max-age=86400'};
+      let start=0,end=jingle.length-1,status=200;
+      if(req.headers.range){
+        const match=/^bytes=(\d+)-(\d*)$/.exec(req.headers.range);
+        if(!match||Number(match[1])>=jingle.length||Number(match[1])>Number(match[2]||end)){
+          res.writeHead(416,{...headers,'Content-Range':'bytes */'+jingle.length});res.end();return;
+        }
+        start=Number(match[1]);end=Math.min(Number(match[2]||end),end);status=206;
+        headers['Content-Range']='bytes '+start+'-'+end+'/'+jingle.length;
+      }
+      headers['Content-Length']=end-start+1;
+      res.writeHead(status,headers);res.end(req.method==='HEAD'?undefined:jingle.subarray(start,end+1));return;
+    }
     if(req.method==='GET'&&path==='/health'){send(200,{ok:true});return;}
     let p={};
     if(['POST','PATCH'].includes(req.method)) {

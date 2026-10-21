@@ -18,8 +18,10 @@ Object.assign(words.fr,{newAssignment:'Nouvelle livraison assignée',understood:
 Object.assign(words.es,{newAssignment:'Nueva entrega asignada',understood:'Entendido',soundTitle:'Alertas sonoras',soundHelp:'Activa y prueba el sonido cada vez que ingreses. Mantén la página abierta y revisa el volumen del teléfono. El sonido puede interrumpirse en segundo plano.',enableSound:'Activar y probar sonido',disableSound:'Desactivar sonido',soundReady:'Sonido activado. Comprueba que escuchaste la prueba.',soundInactive:'Sonido desactivado. Los avisos visuales siguen activos.',soundBlocked:'Sonido interrumpido o no disponible. Toca « Activar y probar sonido » y revisa el volumen.',assignmentCount:'Entregas por revisar: '});
 Object.assign(words.fr,{mapFull:'Voir la carte : collecte et livraison',mapPickup:'Aller au point de collecte',mapDelivery:'Aller au lieu de livraison',mapHelp:'Les boutons ouvrent Google Maps. Après la collecte, revenez ici pour la confirmer et passer à la livraison.'});
 Object.assign(words.es,{mapFull:'Ir al mapa: recogida y entrega',mapPickup:'Ir al punto de recogida',mapDelivery:'Ir al lugar de entrega',mapHelp:'Los botones abren Google Maps. Después de recoger el pedido, vuelve aquí para confirmar la recogida y continuar con la entrega.'});
+Object.assign(words.fr,{enableSound:'Activer et tester le jingle',soundReady:'Jingle activé. Vérifiez que vous avez entendu les 10 premières secondes.'});
+Object.assign(words.es,{enableSound:'Activar y probar el jingle',soundReady:'Jingle activado. Comprueba que escuchaste los primeros 10 segundos.'});
 const $=id=>document.getElementById(id);let lang=navigator.language.startsWith('es')?'es':'fr';let token='',shiftId='',epoch=0,gpsTimer,pollTimer,tracking=false,stopPending=false,busy=false,locating=false,refreshing=false,jobs=[],lastSent=0,lastAccuracy=0,lastSync=0,gpsState='offline';
-let audioContext=null,audioEnabled=false,soundBlocked=false,alarmTimer=null,toneNodes=[],soundEpoch=0;const seenAssignments=new Set(),pendingAssignments=new Set();
+let jingleAudio=null,audioEnabled=false,soundBlocked=false,alarmTimer=null,soundEpoch=0;const seenAssignments=new Set(),pendingAssignments=new Set();
 let wakeLock=null,wakePending=false;
 function renderScreen(){$('screenStatus').textContent=tracking&&$('keepScreen').checked?t(wakeLock&&!wakeLock.released?'screenOn':'screenOff'):''}
 async function keepAwake(){if(!tracking||!$('keepScreen').checked||document.hidden||wakeLock||wakePending)return;if(!navigator.wakeLock){renderScreen();return}wakePending=true;const current=epoch;try{const lock=await navigator.wakeLock.request('screen');if(current!==epoch||!tracking||!$('keepScreen').checked||document.hidden){await lock.release();return}wakeLock=lock;lock.addEventListener('release',()=>{if(wakeLock===lock)wakeLock=null;renderScreen()})}catch{}finally{wakePending=false;renderScreen()}}
@@ -30,12 +32,39 @@ function localize(){document.documentElement.lang=lang;document.querySelectorAll
 function renderSync(){$('sync').textContent=lastSync?t('updated')+new Date(lastSync).toLocaleTimeString():''}
 function renderStatus(){const fresh=tracking&&lastSent&&Date.now()-lastSent<60000;const state=stopPending?'stale':tracking?(fresh?'online':gpsState==='waiting'?'waiting':'stale'):'offline';$('status').textContent=t(state);$('status').className='status '+(state==='online'?'good':state==='stale'?'warning':'');$('start').classList.toggle('hidden',tracking||stopPending);$('stop').classList.toggle('hidden',!tracking&&!stopPending);$('consentLabel').classList.toggle('hidden',tracking||stopPending);$('gps').textContent=stopPending?t('stopPending'):tracking&&lastSent?t('last')+new Date(lastSent).toLocaleTimeString()+' · '+t('accuracy')+': '+Math.round(lastAccuracy)+' m':''}
 function renderAlarm(){const pending=pendingAssignments.size;$('assignmentAlert').classList.toggle('hidden',!pending);$('assignmentCount').textContent=t('assignmentCount')+pending;$('soundStatus').textContent=t(soundBlocked?'soundBlocked':audioEnabled?'soundReady':'soundInactive');$('disableSound').classList.toggle('hidden',!audioEnabled);document.title=pending?'🔔 '+t('newAssignment'):'ToutAunClicLa · '+t('space')}
-function stopTones(){for(const n of toneNodes){try{n.stop();n.disconnect()}catch{}}toneNodes=[]}
-function silenceAlarm(){clearInterval(alarmTimer);alarmTimer=null;stopTones()}
-function disableAudio(){soundEpoch++;audioEnabled=false;soundBlocked=false;silenceAlarm();const context=audioContext;audioContext=null;if(context)context.close().catch(()=>{});renderAlarm()}
-function playTone(){if(!audioEnabled||!audioContext)return;if(audioContext.state!=='running'){soundBlocked=true;renderAlarm();return}try{stopTones();const now=audioContext.currentTime;for(let repeat=0;repeat<2;repeat++)for(let i=0;i<3;i++){const o=audioContext.createOscillator(),g=audioContext.createGain(),at=now+repeat*0.9+i*0.22;o.type='sine';o.frequency.value=[660,880,1046][i];g.gain.setValueAtTime(0,at);g.gain.linearRampToValueAtTime(0.18,at+0.02);g.gain.linearRampToValueAtTime(0,at+0.18);o.connect(g);g.connect(audioContext.destination);o.start(at);o.stop(at+0.2);o.onended=()=>{o.disconnect();g.disconnect()};toneNodes.push(o)}soundBlocked=false}catch{soundBlocked=true}renderAlarm()}
-function beginAlarm(){if(!pendingAssignments.size||!audioEnabled||alarmTimer!==null)return;playTone();alarmTimer=setInterval(()=>{if(pendingAssignments.size&&token)playTone();else silenceAlarm()},8000)}
-async function enableAudio(){const button=$('enableSound');button.disabled=true;const current=soundEpoch;try{const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio)throw Error('audio unavailable');if(!audioContext){audioContext=new Audio();const created=audioContext;created.onstatechange=()=>{if(audioContext===created&&audioEnabled){soundBlocked=created.state!=='running';renderAlarm()}}}const context=audioContext;await context.resume();if(current!==soundEpoch||audioContext!==context)return;if(context.state!=='running')throw Error('audio blocked');audioEnabled=true;soundBlocked=false;silenceAlarm();playTone();if(pendingAssignments.size)alarmTimer=setInterval(()=>{if(pendingAssignments.size&&token)playTone();else silenceAlarm()},8000)}catch{if(current===soundEpoch){audioEnabled=false;soundBlocked=true;renderAlarm()}}finally{button.disabled=false}}
+function stopJingle(){if(jingleAudio){jingleAudio.pause();jingleAudio.currentTime=0}}
+function silenceAlarm(){clearInterval(alarmTimer);alarmTimer=null;soundEpoch++;stopJingle()}
+function disableAudio(){audioEnabled=false;soundBlocked=false;silenceAlarm();renderAlarm()}
+async function playJingle(){
+  if(!audioEnabled||!jingleAudio)return false;
+  stopJingle();
+  const current=++soundEpoch;
+  try{
+    await jingleAudio.play();
+    if(current!==soundEpoch)return false;
+    soundBlocked=false;renderAlarm();return true;
+  }catch{
+    if(current===soundEpoch){soundBlocked=true;renderAlarm()}
+    return false;
+  }
+}
+function repeatAlarm(){if(pendingAssignments.size&&token)void playJingle();else silenceAlarm()}
+function beginAlarm(){if(!pendingAssignments.size||!audioEnabled||alarmTimer!==null)return;void playJingle();alarmTimer=setInterval(repeatAlarm,15000)}
+async function enableAudio(){
+  const button=$('enableSound');button.disabled=true;
+  try{
+    if(!jingleAudio){
+      jingleAudio=new window.Audio('/assignment-jingle.mp3');
+      jingleAudio.preload='auto';
+      jingleAudio.addEventListener('error',()=>{if(audioEnabled){soundBlocked=true;renderAlarm()}});
+    }
+    silenceAlarm();audioEnabled=true;soundBlocked=false;
+    if(await playJingle()){
+      if(pendingAssignments.size&&audioEnabled)alarmTimer=setInterval(repeatAlarm,15000);
+    }else if(audioEnabled){audioEnabled=false;renderAlarm()}
+  }catch{audioEnabled=false;soundBlocked=true;renderAlarm()}
+  finally{button.disabled=false}
+}
 function detectAssignments(){const assigned=new Set(jobs.filter(d=>d.status==='assigned').map(d=>d.id));for(const id of assigned)if(!seenAssignments.has(id)){seenAssignments.add(id);pendingAssignments.add(id)}for(const id of pendingAssignments)if(!assigned.has(id))pendingAssignments.delete(id);if(!pendingAssignments.size)silenceAlarm();else beginAlarm();renderAlarm()}
 async function api(path,method='GET',body,auth=token){let r;try{r=await fetch(path,{method,headers:{'Content-Type':'application/json',Authorization:'Bearer '+auth},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(15000)})}catch{throw Error(t('network'))}const data=await r.json();if(!r.ok){if(r.status===401&&path!='/login'){reset();throw Error(t('expired'))}const e=Error(data.error||t('network'));e.status=r.status;throw e}return data}
 function clearGps(){disableAudio();tracking=false;releaseScreen();epoch++;clearInterval(gpsTimer);lastSent=0;locating=false}

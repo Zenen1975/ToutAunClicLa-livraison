@@ -22,6 +22,21 @@ test('Driver web routes, consent, GPS and delivery authorization work over HTTP'
   }
   try{
     for(const path of ['/livreur','/livreur/','/repartidor']){const r=await fetch(base+path);assert.equal(r.status,200);assert.match(await r.text(),/id="consent"/)}
+    const audio=await fetch(base+'/assignment-jingle.mp3');
+    assert.equal(audio.status,200);
+    assert.equal(audio.headers.get('content-type'),'audio/mpeg');
+    const bytes=new Uint8Array(await audio.arrayBuffer());
+    assert.ok(bytes.length>1000);
+    const range=await fetch(base+'/assignment-jingle.mp3',{headers:{Range:'bytes=0-99'}});
+    assert.equal(range.status,206);
+    assert.equal(range.headers.get('content-range'),'bytes 0-99/'+bytes.length);
+    assert.deepEqual(new Uint8Array(await range.arrayBuffer()),bytes.slice(0,100));
+    const head=await fetch(base+'/assignment-jingle.mp3',{method:'HEAD'});
+    assert.equal(head.status,200);
+    assert.equal(head.headers.get('content-length'),String(bytes.length));
+    assert.equal((await head.arrayBuffer()).byteLength,0);
+    const invalid=await fetch(base+'/assignment-jingle.mp3',{headers:{Range:'bytes=9999999-'}});
+    assert.equal(invalid.status,416);
     assert.equal((await api('/deliveries')).status,401);
     assert.equal((await api('/email/check',null,{})).status,401);
     const at=(await api('/login',null,{email:admin.email,password})).data.token;
