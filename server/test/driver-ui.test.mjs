@@ -127,7 +127,11 @@ test('Grouped driver view includes all three destinations, one pickup confirmati
  assert.equal(url.searchParams.get('destination'),'Destination 3');assert.equal(url.searchParams.get('waypoints'),'Restaurant Montréal|Destination 1|Destination 2');
  assert.ok(group.children.some(c=>c.textContent.includes('42,00')));
  assert.ok(group.children.some(c=>c.textContent.includes('todos los paquetes')));
- const first=s.nodes.get('jobs').children[1];assert.ok(first.children.some(c=>c.textContent.includes('14,00')));assert.ok(first.children.some(c=>c.textContent.includes('Propina íntegra')));
+ const first=s.nodes.get('jobs').children[1];const earnings=first.children.find(c=>c.textContent.startsWith('Tu entrega:'));
+ assert.ok(earnings.textContent.includes('9,00'));assert.ok(earnings.textContent.includes('5,00'));assert.ok(earnings.textContent.includes('propina. Tasas incluidas.'));
+ assert.ok(!first.children.some(c=>/90|Comisión|Tarifa|10,00/.test(c.textContent)));
+ s.evaluate("lang='fr';renderJobs()");
+ const french=s.nodes.get('jobs').children[1].children.find(c=>c.textContent.startsWith('Votre livraison:'));assert.ok(french.textContent.includes('pourboire. Taxes incluses.'));
  s.evaluate("jobs.forEach(d=>d.status='picked_up');renderJobs()");
  const route=s.nodes.get('jobs').children[0].children.find(c=>c.href);
  assert.equal(new URL(route.href).searchParams.get('waypoints'),'Destination 1|Destination 2');
