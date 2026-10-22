@@ -14,7 +14,7 @@ export function requestMessage(job,config){
  const price=c=>new Intl.NumberFormat('fr-CA',{style:'currency',currency:'CAD'}).format(c/100)+' CAD';
  const total=job.total_cents+job.gst_cents+job.qst_cents+job.tip_cents;
  const ready=job.ready_at?new Date(job.ready_at).toLocaleString('fr-CA',{timeZone:'America/Toronto'}):'Dès que possible / Lo antes posible';
- const fields=[['Référence / Referencia',reference],['Restaurant ou client / Restaurante o cliente',job.requester_name],['Collecte / Recogida',job.pickup],['Livraison / Destino',job.destination],['Collecte souhaitée / Recogida solicitada',ready],['Envoi / Envío',job.item_description],['Prix confirmé, taxes incluses / Precio confirmado, tasas incluidas',price(total)],['Pourboire inclus dans le total / Propina incluida en el total',price(job.tip_cents)]];
+ const fields=[['Référence / Referencia',reference],['Nom du demandeur ou de l’entreprise / Nombre del solicitante o negocio',job.requester_name],['Collecte / Recogida',job.pickup],['Livraison / Destino',job.destination],['Collecte souhaitée / Recogida solicitada',ready],['Envoi / Envío',job.item_description],['Prix confirmé, taxes incluses / Precio confirmado, tasas incluidas',price(total)],['Pourboire inclus dans le total / Propina incluida en el total',price(job.tip_cents)]];
  const url=config.appUrl+'/';
  const intro='Une nouvelle demande de livraison attend votre attribution. / Tienes una nueva solicitud de livraison pendiente de asignar.';
  return {from:{name:'ToutAunClicLa · Livraison',address:config.from},to:{name:'ToutAunClicLa · Service client',address:config.recipient},
