@@ -13,7 +13,7 @@ test('Driver web routes, consent, GPS and delivery authorization work over HTTP'
   const admin=store.createUser({name:'Admin',email:'admin@example.test',password,role:'admin'});
   const a=store.createUser({name:'Driver A',email:'a@example.test',password});
   store.createUser({name:'Driver B',email:'b@example.test',password});
-  process.env.ASSIGNMENT_EMAIL_ENABLED='false';process.env.REQUEST_EMAIL_ENABLED='false'; // Tests must never send real mail, including during Render builds.
+  process.env.ASSIGNMENT_EMAIL_ENABLED='false';process.env.REQUEST_EMAIL_ENABLED='false';process.env.PASSWORD_RESET_EMAIL_ENABLED='false'; // Tests must never send real mail, including during Render builds.
   const {server}=await import('../server.mjs');
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base='http://127.0.0.1:'+server.address().port;

@@ -6,12 +6,17 @@ import {createAssignmentMailer} from './assignment-mail.mjs';
 import {checkEmail} from './email-check.mjs';
 import {computeQuote} from './routes.mjs';
 import {createRequestMailer} from './request-mail.mjs';
+import {createPasswordMailer} from './password-mail.mjs';
 const store=createStore(process.env.DATABASE_PATH || 'livraison.sqlite');
 const mailer=createAssignmentMailer(store);
 const requestMailer=createRequestMailer(store);
+const passwordMailer=createPasswordMailer();
+let retentionTimer;
+const securityAttempts=new Map();
 const page=readFileSync(new URL('./public/index.html',import.meta.url));
 const driverPage=readFileSync(new URL('./public/livreur.html',import.meta.url));
 const requestPage=readFileSync(new URL('./public/demander.html',import.meta.url));
+const accountPages=Object.fromEntries(['forgot-password','reset-password','restaurant'].map(name=>['/'+name,readFileSync(new URL('./public/'+name+'.html',import.meta.url))]));
 const jingle=readFileSync(new URL('./public/assignment-jingle.mp3',import.meta.url));
 const driverPortrait=readFileSync(new URL('./public/livreur-team-v1.webp',import.meta.url));
 const attempts=new Map();
@@ -25,6 +30,7 @@ export const server=http.createServer(async(req,res)=>{
   const send=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));};
   try {
     const path=new URL(req.url,'http://localhost').pathname;
+    if(req.method==='GET'&&accountPages[path.replace(/\/$/,'')]){res.setHeader('Referrer-Policy','no-referrer');res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(accountPages[path.replace(/\/$/,'')]);return;}
     if(req.method==='GET'&&path==='/'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(page);return;}
     if(req.method==='GET'&&['/livreur','/livreur/','/repartidor','/repartidor/'].includes(path)){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(driverPage);return;}
     if(req.method==='GET'&&['/demander','/demander/','/solicitar','/solicitar/'].includes(path)){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(requestPage);return;}
@@ -50,6 +56,17 @@ export const server=http.createServer(async(req,res)=>{
       try {p=JSON.parse(raw || '{}');}catch{throw new Problem(400,'JSON incorrecto');}
       if(!p || typeof p!=='object'||Array.isArray(p))throw new Problem(400,'JSON incorrecto');
     }
+    if(req.method==='POST'&&['/password/forgot','/password/reset'].includes(path)){
+      const now=Date.now(),key=req.socket.remoteAddress;
+      for(const [k,v]of securityAttempts)if(now-v.start>600000)securityAttempts.delete(k);
+      let a=securityAttempts.get(key);if(!a){a={start:now,count:0};securityAttempts.set(key,a)}
+      if(++a.count>60)throw new Problem(429,'Espera antes de reintentar / Attendez avant de réessayer');
+      if(path==='/password/forgot'){
+        const account=store.preparePasswordReset(p.email);
+        send(200,{ok:true});void passwordMailer.send(account);
+      }else send(200,store.resetPassword(p.token,p.password));
+      return;
+    }
     if(req.method==='POST'&&path==='/login') {
       const key=req.socket.remoteAddress; const now=Date.now();
       if(attempts.size>10000)for(const [k,v]of attempts)if(now-v.start>600000)attempts.delete(k);
@@ -67,7 +84,11 @@ export const server=http.createServer(async(req,res)=>{
       let a=requestAttempts.get(key);if(!a||now-a.start>600000){a={start:now,count:0};requestAttempts.set(key,a);}
       if(++a.count>10)throw new Problem(429,'Demasiadas solicitudes. Espera 10 minutos / Trop de demandes. Attendez 10 minutes');
       if(path==='/quotes')send(201,store.saveQuote(await computeQuote(p)));
-      else {send(201,store.createRequest(p));void requestMailer.flush();}
+      else {
+        let restaurant=null;
+        if(req.headers.authorization?.replace(/^Bearer(?:\s+|$)/,'').trim()){restaurant=store.authenticate(req.headers.authorization.replace(/^Bearer /,''));if(restaurant.role!=='restaurant')throw new Problem(403,'Acceso restaurante / Accès restaurant');p.requesterName=restaurant.name;}
+        send(201,store.createRequest(p,restaurant));void requestMailer.flush();
+      }
       return;
     }
     const token=(req.headers.authorization || '').replace(/^Bearer /,'');
@@ -103,8 +124,11 @@ export const server=http.createServer(async(req,res)=>{
     }
     else if(req.method==='POST'&&path==='/users'){
       if(u.role!=='admin')throw new Problem(403,'Acceso denegado');
-      data=store.createUser({...p,role:'driver'});
+      data=store.createUser({...p,role:p.role==='restaurant'?'restaurant':'driver'});
     }
+    else if(req.method==='GET'&&path==='/restaurant/profile')data=store.restaurantProfile(u);
+    else if(req.method==='PATCH'&&path==='/restaurant/profile')data=store.restaurantProfile(u,p);
+    else if(req.method==='GET'&&path==='/restaurant/requests')data=store.restaurantRequests(u);
     else if(req.method==='GET'&&path==='/deliveries')data=store.deliveries(u);
     else if(req.method==='GET'&&path==='/requests')data=store.requests(u);
     else if(req.method==='PATCH'&&/^\/requests\/[a-f0-9]{48}$/.test(path)){
@@ -128,7 +152,7 @@ export const server=http.createServer(async(req,res)=>{
     send(200,data);
   }catch(e){send(e.status || 500,{error:e.status?e.message:'Error del servidor / Erreur serveur'});if(!e.status)console.error(e);}
 });
-server.on('listening',()=>{mailer.start();requestMailer.start()});
-server.on('close',()=>{mailer.stop();requestMailer.stop()});
+server.on('listening',()=>{store.pruneHistory();mailer.start();requestMailer.start();retentionTimer=setInterval(()=>{try{store.pruneHistory()}catch{console.error('No se pudo limpiar el historial de entregas.')}},60000);retentionTimer.unref()});
+server.on('close',()=>{clearInterval(retentionTimer);mailer.stop();requestMailer.stop()});
 if(process.argv[1]===fileURLToPath(import.meta.url))server.listen(Number(process.env.PORT || 8787),process.env.HOST || '127.0.0.1',()=>console.log('Panel: http://127.0.0.1:'+ (process.env.PORT || 8787)));
 

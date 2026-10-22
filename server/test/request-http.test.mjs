@@ -7,7 +7,7 @@ import {randomUUID} from 'node:crypto';
 import {createStore} from '../core.mjs';
 
 test('HTTP quote → accepted price and tip → admin assignment → restaurant status and driver earnings is private and durable',async()=>{
- const dir=mkdtempSync(join(tmpdir(),'tacl-request-http-'));process.env.DATABASE_PATH=join(dir,'test.sqlite');process.env.ASSIGNMENT_EMAIL_ENABLED='false';process.env.REQUEST_EMAIL_ENABLED='false';process.env.GOOGLE_ROUTES_API_KEY='test-only-key';
+ const dir=mkdtempSync(join(tmpdir(),'tacl-request-http-'));process.env.DATABASE_PATH=join(dir,'test.sqlite');process.env.ASSIGNMENT_EMAIL_ENABLED='false';process.env.REQUEST_EMAIL_ENABLED='false';process.env.PASSWORD_RESET_EMAIL_ENABLED='false';process.env.GOOGLE_ROUTES_API_KEY='test-only-key';
  const store=createStore(process.env.DATABASE_PATH),password='test-password-123';
  const admin=store.createUser({name:'Admin',email:'admin@example.test',password,role:'admin'}),driver=store.createUser({name:'Driver',email:'driver@example.test',password});
  const realFetch=globalThis.fetch;
