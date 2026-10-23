@@ -9,7 +9,7 @@ const env={STRIPE_SECRET_KEY:'sk_test_fixture',STRIPE_WEBHOOK_SECRET:'whsec_fixt
 function setup(){
  const store=createStore(':memory:'),route={pickup:'123 Montréal',destination:'456 Longueuil',pickupPostalCode:'H2X 1Y4',destinationPostalCode:'J4K 1A1'};
  const q=store.saveQuote({...route,distanceMeters:5000,durationSeconds:1400,baselineSeconds:1000},{publicQuote:true});
- const body={...route,requesterName:'Test',recipientName:'Client',recipientPhone:'4505550101',itemDescription:'Repas',submissionId:randomUUID(),statusToken:'ab'.repeat(32),quoteId:q.quoteId,consent:true,acceptPrice:true,acceptTerms:true,termsVersion:'2026-10-23-v1',tipCents:800};
+ const body={...route,requesterName:'Test',recipientName:'Client',recipientPhone:'4505550101',itemDescription:'Repas',submissionId:randomUUID(),statusToken:'ab'.repeat(32),quoteId:q.quoteId,consent:true,acceptPrice:true,acceptTerms:true,termsVersion:'2026-10-23-v2',tipCents:800};
  const request=store.createRequest(body,null,{awaitPayment:true});return {store,request,body,q};
 }
 test('Checkout fixes the server total, reuses one persisted session and activates delivery/mail only after verified paid data',async()=>{
@@ -40,4 +40,22 @@ test('Quote and payment notices are separate durable queues, send without a pane
  store.confirmPayment({id:'cs_test_paid',mode:'payment',payment_status:'paid',currency:'cad',amount_total:q.totalCents+800,metadata:{request_id:request.id},client_reference_id:request.id});
  await paidMailer.flush();await paidMailer.flush();assert.equal(messages.length,2);assert.match(messages[1].subject,/Pago confirmado/);assert.equal(messages[1].to.address,'serviceclient@toutaunclicla.com');
  }finally{quoteMailer.stop();paidMailer.stop();store.db.close()}
+});
+
+test('Checkout diagnostics never reveal provider errors or credentials and stale attempts never contact Stripe',async()=>{
+ for(const [status,param,expected] of [[401,undefined,'STRIPE_AUTH'],[403,undefined,'STRIPE_PERMISSION'],[429,undefined,'STRIPE_RATE_LIMIT'],[400,'expires_at','STRIPE_EXPIRED'],[400,undefined,'STRIPE_CHECKOUT_REJECTED']]){
+  const {store,request,body}=setup(),logs=[];
+  try{
+   await assert.rejects(()=>checkout(store,request,body.statusToken,{env,log:{error:m=>logs.push(m)},fetcher:async()=>({ok:false,status,json:async()=>({error:{param,message:'SECRET_PROVIDER_PAYLOAD',code:'SECRET_PROVIDER_PAYLOAD'}})})}),e=>e.message.includes(expected)&&!e.message.includes('SECRET_PROVIDER_PAYLOAD'));
+   assert.ok(!JSON.stringify(logs).includes('SECRET_PROVIDER_PAYLOAD'));assert.equal(store.db.prepare('SELECT session_id FROM request_payments').get().session_id,null);
+  }finally{store.db.close()}
+ }
+ const {store,request,body}=setup();let calls=0;
+ try{
+  store.db.prepare('UPDATE request_payments SET created_at=?').run(Date.now()-61000);
+  await assert.rejects(()=>checkout(store,request,body.statusToken,{env,fetcher:async()=>{calls++;throw Error()}}),e=>e.status===409&&e.message.includes('STRIPE_EXPIRED'));assert.equal(calls,0);
+  store.db.prepare("UPDATE request_payments SET session_id='cs_test_stored',expires_at=?").run(Date.now()+600000);
+  await assert.rejects(()=>checkout(store,request,body.statusToken,{env:{...env,STRIPE_SECRET_KEY:'sk_live_fixture'},fetcher:async()=>{calls++;throw Error()}}),e=>e.status===409&&e.message.includes('STRIPE_MODE'));assert.equal(calls,0);
+  assert.throws(()=>paymentConfig({...env,STRIPE_SECRET_KEY:'pk_live_fixture'}),/STRIPE_KEY_FORMAT/);
+ }finally{store.db.close()}
 });

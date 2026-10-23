@@ -35,7 +35,7 @@ test('Restaurant page offers exactly four optional tip amounts and requires expl
 test('Uncertain receipt retries the identical accepted price and tip once; status changes show driver-on-way without exposing contact data',async()=>{
  const s=setup(),n=id=>s.nodes.get(id);n('tip800').onclick();await n('calculate').onclick();n('acceptPrice').checked=true;n('acceptTerms').checked=true;s.failNextReceipt();
  await n('requestForm').onsubmit({preventDefault(){}});assert.equal(n('pickup').disabled,true);assert.match(n('send').textContent,/Reintentar/);
- const first=s.calls.find(c=>c.path==='/requests').options.body;assert.equal(JSON.parse(first).tipCents,800);assert.equal(JSON.parse(first).acceptPrice,true);assert.equal(JSON.parse(first).acceptTerms,true);assert.equal(JSON.parse(first).termsVersion,'2026-10-23-v1');
+ const first=s.calls.find(c=>c.path==='/requests').options.body;assert.equal(JSON.parse(first).tipCents,800);assert.equal(JSON.parse(first).acceptPrice,true);assert.equal(JSON.parse(first).acceptTerms,true);assert.equal(JSON.parse(first).termsVersion,'2026-10-23-v2');
  await n('requestForm').onsubmit({preventDefault(){}});assert.equal(s.calls.filter(c=>c.path==='/requests')[1].options.body,first);
  assert.equal(s.calls.filter(c=>c.redirect).length,1);assert.match(s.calls.find(c=>c.redirect).redirect,/^https:\/\/checkout.stripe.com\//);
  await new Promise(setImmediate);await s.evaluate('checkStatus()');assert.match(n('trackingMessage').textContent,/Buscando repartidor/);s.assign();await s.evaluate('checkStatus()');assert.match(n('trackingMessage').textContent,/Un repartidor va en camino/);assert.match(n('trackingPrice').textContent,/22,95/);

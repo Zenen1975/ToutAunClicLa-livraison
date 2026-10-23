@@ -25,7 +25,7 @@ test('Restaurant access, authenticated delivery submission and password recovery
   assert.equal((await api('/drivers',{token:at})).data.length,0);
   const route={pickup:payload.pickup,pickupPostalCode:payload.pickupPostalCode,destination:'456 Longueuil',destinationPostalCode:'J4K 1A1'};
   const q=store.saveQuote({...route,distanceMeters:3500,durationSeconds:900,baselineSeconds:900});
-  const requested=await api('/requests',{token:rt,body:{...route,quoteId:q.quoteId,acceptPrice:true,acceptTerms:true,termsVersion:'2026-10-23-v1',consent:true,submissionId:randomUUID(),statusToken:'ab'.repeat(32),requesterName:'Spoofed name',recipientName:'Client',recipientPhone:'4505550101',itemDescription:'Repas'}});assert.equal(requested.status,201);
+  const requested=await api('/requests',{token:rt,body:{...route,quoteId:q.quoteId,acceptPrice:true,acceptTerms:true,termsVersion:'2026-10-23-v2',consent:true,submissionId:randomUUID(),statusToken:'ab'.repeat(32),requesterName:'Spoofed name',recipientName:'Client',recipientPhone:'4505550101',itemDescription:'Repas'}});assert.equal(requested.status,201);
   assert.equal((await stripe.pay(realFetch,base,requested.data.id)).status,200);
   const own=(await api('/restaurant/requests',{token:rt})).data;assert.equal(own.length,1);assert.equal(own[0].id,requested.data.id);assert.ok(!JSON.stringify(own).includes('status_token_hash'));assert.equal(store.requests(store.authenticate(at))[0].requester_name,payload.name);
   const known=await api('/password/forgot',{body:{email:payload.email}}),unknown=await api('/password/forgot',{body:{email:'missing@example.test'}});assert.deepEqual(known,unknown);assert.deepEqual(known.data,{ok:true});

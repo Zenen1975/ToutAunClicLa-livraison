@@ -5,6 +5,7 @@ export function paymentConfig(env=process.env){
  const key=env.STRIPE_SECRET_KEY?.trim(),webhookSecret=env.STRIPE_WEBHOOK_SECRET?.trim();
  let base;try{base=new URL(env.PUBLIC_APP_URL)}catch{}
  if(!key||!webhookSecret||!base||base.protocol!=='https:'||base.username||base.password)throw new Problem(503,'Pago no disponible por el momento. Contacta a ToutAunClicLa / Paiement temporairement indisponible. Contactez ToutAunClicLa');
+ if(!/^(sk|rk)_(test|live)_[A-Za-z0-9_]+$/.test(key))throw new Problem(503,'[STRIPE_KEY_FORMAT] Revisa la clave secreta en Render / Vérifiez la clé secrète dans Render');
  return {key,webhookSecret,appUrl:base.origin,live:/^(sk|rk)_live_/.test(key)};
 }
 export function verifyStripeEvent(raw,signature,config,now=Date.now()){
@@ -18,22 +19,24 @@ export function verifyStripeEvent(raw,signature,config,now=Date.now()){
  if(event.livemode!==config.live)throw new Problem(400,'Modo Stripe incompatible');
  return event;
 }
-export async function checkout(store,request,token,{env=process.env,fetcher=fetch}={}){
+export async function checkout(store,request,token,{env=process.env,fetcher=fetch,log=console}={}){
  const config=paymentConfig(env);
  store.requestStatus(request.id,token);
  const payment=store.db.prepare('SELECT * FROM request_payments WHERE request_id=?').get(request.id);
  if(!payment)throw new Problem(409,'Solicitud anterior sin pago Stripe / Demande antérieure sans paiement Stripe');
  if(payment.status==='paid')return {...request,paid:true};
  if(payment.session_id){
+   if(payment.session_id.startsWith('cs_test_')&&config.live||payment.session_id.startsWith('cs_live_')&&!config.live)throw new Problem(409,'[STRIPE_MODE] La solicitud pertenece al otro entorno. Calcula un precio nuevo / La demande appartient à l’autre environnement. Calculez un nouveau prix');
    if(payment.expires_at<=Date.now())throw new Problem(409,'El enlace de pago venció. Inicia una nueva solicitud / Le lien de paiement a expiré. Créez une nouvelle demande');
    return {...request,checkoutUrl:payment.checkout_url};
  }
  // The persisted creation time fixes parameters across retries and restarts.
- if(Date.now()-payment.created_at>23*3600000)throw new Problem(409,'Inicia una nueva solicitud / Créez une nouvelle demande');
+ const expiresAt=Math.floor(payment.created_at/1000)+1860;
+ if(expiresAt<=Math.ceil(Date.now()/1000)+1800)throw new Problem(409,'[STRIPE_EXPIRED] Este intento de pago venció. Calcula un precio nuevo / Cette tentative de paiement a expiré. Calculez un nouveau prix');
  const back=config.appUrl+'/demander#'+request.id+'.'+token;
  const params=new URLSearchParams({mode:'payment',client_reference_id:payment.id,'metadata[request_id]':payment.id,
    'payment_intent_data[metadata][request_id]':payment.id,success_url:back,cancel_url:back,
-   expires_at:String(Math.floor(payment.created_at/1000)+1860),
+   expires_at:String(expiresAt),
    'line_items[0][quantity]':'1','line_items[0][price_data][currency]':'cad',
    'line_items[0][price_data][unit_amount]':String(payment.amount_cents),
    'line_items[0][price_data][product_data][name]':'ToutAunClicLa · Livraison · '+request.reference,
@@ -44,7 +47,15 @@ export async function checkout(store,request,token,{env=process.env,fetcher=fetc
    response=await fetcher('https://api.stripe.com/v1/checkout/sessions',{method:'POST',headers:{Authorization:'Bearer '+config.key,'Content-Type':'application/x-www-form-urlencoded','Idempotency-Key':'tacl-delivery-'+payment.id},body:params.toString(),signal:AbortSignal.timeout(15000)});
    session=await response.json();
  }catch{throw new Problem(503,'Stripe no respondió. Reintenta el mismo pago / Stripe ne répond pas. Réessayez le même paiement')}
- if(!response.ok||typeof session.id!=='string'||!session.id.startsWith('cs_')||typeof session.url!=='string'||!session.url.startsWith('https://checkout.stripe.com/')||session.amount_total!==payment.amount_cents||session.currency!=='cad'||session.livemode!==config.live||!Number.isSafeInteger(session.expires_at)||session.expires_at*1000<=Date.now())throw new Problem(503,'No se pudo preparar el pago Stripe / Impossible de préparer le paiement Stripe');
+ if(!response.ok){
+   // Only fixed categories leave the process; never expose provider payloads.
+   const code=response.status===401?'STRIPE_AUTH':response.status===403?'STRIPE_PERMISSION':response.status===429?'STRIPE_RATE_LIMIT':session?.error?.param==='expires_at'?'STRIPE_EXPIRED':'STRIPE_CHECKOUT_REJECTED';
+   log.error('Stripe Checkout: '+code+' (HTTP '+(Number(response.status)||0)+')');
+   const messages={STRIPE_AUTH:'Stripe rechazó la clave secreta. Revisa STRIPE_SECRET_KEY en Render / Stripe a refusé la clé secrète. Vérifiez STRIPE_SECRET_KEY dans Render',STRIPE_PERMISSION:'La clave no tiene permiso para crear el pago / La clé ne permet pas de créer le paiement',STRIPE_RATE_LIMIT:'Stripe recibió demasiadas solicitudes. Espera y reintenta / Stripe a reçu trop de demandes. Patientez et réessayez',STRIPE_EXPIRED:'Este intento de pago venció. Calcula un precio nuevo / Cette tentative de paiement a expiré. Calculez un nouveau prix',STRIPE_CHECKOUT_REJECTED:'Stripe rechazó la preparación del pago. Revisa el error en Workbench → Logs / Stripe a refusé la création du paiement. Vérifiez l’erreur dans Workbench → Logs'};
+   throw new Problem(code==='STRIPE_EXPIRED'?409:503,'['+code+'] '+messages[code]);
+ }
+ if(session?.livemode!==config.live)throw new Problem(503,'[STRIPE_MODE] El entorno de Stripe no coincide. Revisa la configuración / L’environnement Stripe ne correspond pas. Vérifiez la configuration');
+ if(typeof session.id!=='string'||!session.id.startsWith('cs_')||typeof session.url!=='string'||!session.url.startsWith('https://checkout.stripe.com/')||session.amount_total!==payment.amount_cents||session.currency!=='cad'||!Number.isSafeInteger(session.expires_at)||session.expires_at*1000<=Date.now())throw new Problem(503,'[STRIPE_RESPONSE] No se pudo verificar el enlace de pago Stripe / Impossible de vérifier le lien de paiement Stripe');
  store.db.prepare('UPDATE request_payments SET session_id=?,checkout_url=?,expires_at=? WHERE id=? AND (session_id IS NULL OR session_id=?)').run(session.id,session.url,session.expires_at*1000,payment.id,session.id);
  return {...request,checkoutUrl:session.url};
 }

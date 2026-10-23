@@ -20,7 +20,7 @@ const page=readFileSync(new URL('./public/index.html',import.meta.url));
 const driverPage=readFileSync(new URL('./public/livreur.html',import.meta.url));
 const requestPage=readFileSync(new URL('./public/demander.html',import.meta.url));
 const accountPages=Object.fromEntries(['forgot-password','reset-password','restaurant'].map(name=>['/'+name,readFileSync(new URL('./public/'+name+'.html',import.meta.url))]));
-const termsPage=readFileSync(new URL('./public/conditions-2026-10-23-v1.html',import.meta.url));
+const termsPages=Object.fromEntries(['2026-10-23-v1','2026-10-23-v2'].map(version=>['/terms/'+version,readFileSync(new URL('./public/conditions-'+version+'.html',import.meta.url))]));
 const jingle=readFileSync(new URL('./public/assignment-jingle.mp3',import.meta.url));
 const driverPortrait=readFileSync(new URL('./public/livreur-team-v1.webp',import.meta.url));
 const attempts=new Map();
@@ -53,7 +53,7 @@ export const server=http.createServer(async(req,res)=>{
       res.writeHead(status,headers);res.end(req.method==='HEAD'?undefined:jingle.subarray(start,end+1));return;
     }
     if(['GET','HEAD'].includes(req.method)&&path==='/livreur-team-v1.webp'){res.writeHead(200,{'Content-Type':'image/webp','Content-Length':driverPortrait.length,'Cache-Control':'public, max-age=86400'});res.end(req.method==='HEAD'?undefined:driverPortrait);return;}
-    if(req.method==='GET'&&['/conditions','/terms/2026-10-23-v1'].includes(path)){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(termsPage);return;}
+    if(req.method==='GET'&&(path==='/conditions'||termsPages[path])){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(termsPages[path==='/conditions'?'/terms/2026-10-23-v2':path]);return;}
     if(req.method==='GET'&&path==='/health'){send(200,{ok:true});return;}
     if(req.method==='POST'&&path==='/stripe/webhook'){
       const config=paymentConfig();const chunks=[];let length=0;
