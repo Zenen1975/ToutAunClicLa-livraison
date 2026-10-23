@@ -9,7 +9,7 @@ const env={STRIPE_SECRET_KEY:'sk_test_fixture',STRIPE_WEBHOOK_SECRET:'whsec_fixt
 function setup(){
  const store=createStore(':memory:'),route={pickup:'123 Montréal',destination:'456 Longueuil',pickupPostalCode:'H2X 1Y4',destinationPostalCode:'J4K 1A1'};
  const q=store.saveQuote({...route,distanceMeters:5000,durationSeconds:1400,baselineSeconds:1000},{publicQuote:true});
- const body={...route,requesterName:'Test',recipientName:'Client',recipientPhone:'4505550101',itemDescription:'Repas',submissionId:randomUUID(),statusToken:'ab'.repeat(32),quoteId:q.quoteId,consent:true,acceptPrice:true,tipCents:800};
+ const body={...route,requesterName:'Test',recipientName:'Client',recipientPhone:'4505550101',itemDescription:'Repas',submissionId:randomUUID(),statusToken:'ab'.repeat(32),quoteId:q.quoteId,consent:true,acceptPrice:true,acceptTerms:true,termsVersion:'2026-10-23-v1',tipCents:800};
  const request=store.createRequest(body,null,{awaitPayment:true});return {store,request,body,q};
 }
 test('Checkout fixes the server total, reuses one persisted session and activates delivery/mail only after verified paid data',async()=>{

@@ -25,9 +25,14 @@ test('HTTP quote → accepted price and tip → admin assignment → restaurant 
   delete process.env.GOOGLE_ROUTES_API_KEY;assert.equal((await api('/quotes',{body:route})).status,503);process.env.GOOGLE_ROUTES_API_KEY='test-only-key';
   const q=await api('/quotes',{body:route});assert.equal(q.status,201);assert.equal(q.data.totalCents,1605);assert.equal(store.quoteActivity(admin).length,1);assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM quote_emails').get().n,1);assert.ok(!JSON.stringify(q).includes('test-only-key'));
   const {contactPhone:removedPhone,...requestRoute}=route;
-  const body={...requestRoute,quoteId:q.data.quoteId,consent:true,acceptPrice:true,tipCents:500,submissionId:randomUUID(),statusToken:'cd'.repeat(32),requesterName:'Restaurant',recipientName:'Recipient',recipientPhone:'4505550101',itemDescription:'Repas'};
+  const body={...requestRoute,quoteId:q.data.quoteId,consent:true,acceptPrice:true,acceptTerms:true,termsVersion:'2026-10-23-v1',tipCents:500,submissionId:randomUUID(),statusToken:'cd'.repeat(32),requesterName:'Restaurant',recipientName:'Recipient',recipientPhone:'4505550101',itemDescription:'Repas'};
   assert.equal((await api('/requests',{body:{...body,acceptPrice:false}})).status,400);
+  assert.equal((await api('/requests',{body:{...body,acceptTerms:false}})).status,400);
+  assert.equal((await api('/requests',{body:{...body,termsVersion:'old'}})).status,400);
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM request_payments').get().n,0);
+  const terms=await realFetch(base+'/terms/2026-10-23-v1');assert.equal(terms.status,200);assert.match(await terms.text(),/Seguro de las mercancías a cargo del remitente/);
   const accepted=await api('/requests',{body});assert.equal(accepted.status,201);assert.deepEqual((await api('/requests',{body})).data,accepted.data);assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM request_emails').get().n,0);
+  const acceptance=store.db.prepare('SELECT terms_version,terms_content_sha256,terms_accepted_at FROM delivery_requests WHERE id=?').get(accepted.data.id);assert.equal(acceptance.terms_version,'2026-10-23-v1');assert.match(acceptance.terms_content_sha256,/^[a-f0-9]{64}$/);assert.ok(acceptance.terms_accepted_at>0);
   assert.equal(store.requests(admin).length,0);
   assert.throws(()=>store.createDelivery(admin,{requestId:accepted.data.id,driverId:driver.id}),/Pago pendiente/);
   assert.equal((await stripe.pay(realFetch,base,accepted.data.id,{},'t=1,v1=bad')).status,400);
@@ -53,7 +58,7 @@ test('HTTP quote → accepted price and tip → admin assignment → restaurant 
   assert.equal((await api('/admin/quotes',{token:dt,body:route})).status,403);
   assert.equal((await api('/deliveries',{token:at,body:{...route,driverId:driver.id}})).status,400);
   const aq=await api('/admin/quotes',{token:at,body:route});assert.equal(aq.status,200);assert.equal(aq.data.subtotalCents,1396);
-  const direct={...route,quoteId:aq.data.quoteId,acceptPrice:true,driverId:driver.id,tipCents:800,totalCents:1,commissionCents:0};
+  const direct={...route,quoteId:aq.data.quoteId,acceptPrice:true,acceptTerms:true,termsVersion:'2026-10-23-v1',driverId:driver.id,tipCents:800,totalCents:1,commissionCents:0};
   assert.equal((await api('/deliveries',{token:dt,body:direct})).status,403);
   assert.equal((await api('/deliveries',{token:at,body:{...direct,acceptPrice:false}})).status,400);
   assert.equal((await api('/deliveries',{token:at,body:{...direct,pickup:'Changed pickup'}})).status,409);

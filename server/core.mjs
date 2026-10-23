@@ -1,3 +1,4 @@
+import {TERMS_VERSION,TERMS_CONTENT_SHA256} from './terms.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
 import {priceRoute,splitDeliveryPrice,TIP_OPTIONS,deliveryTaxes} from './pricing.mjs';
@@ -42,6 +43,7 @@ export function createStore(path = 'livraison.sqlite') {
   const requestColumns=new Set(db.prepare('PRAGMA table_info(delivery_requests)').all().map(c=>c.name));
   for(const [name,type]of [['quote_id','TEXT REFERENCES delivery_quotes(id)'],['status_token_hash','TEXT'],['accepted_at','INTEGER'],['tip_cents','INTEGER NOT NULL DEFAULT 0']])if(!requestColumns.has(name))db.exec('ALTER TABLE delivery_requests ADD COLUMN '+name+' '+type);
   if(!requestColumns.has('restaurant_user_id'))db.exec('ALTER TABLE delivery_requests ADD COLUMN restaurant_user_id TEXT REFERENCES users(id)');
+  for(const [name,type] of [['terms_version','TEXT'],['terms_content_sha256','TEXT'],['terms_accepted_at','INTEGER']])if(!requestColumns.has(name))db.exec('ALTER TABLE delivery_requests ADD COLUMN '+name+' '+type);
   if(!requestColumns.has('payment_state'))db.exec("ALTER TABLE delivery_requests ADD COLUMN payment_state TEXT NOT NULL DEFAULT 'legacy'");
   db.exec(`CREATE TABLE IF NOT EXISTS request_payments(id TEXT PRIMARY KEY,request_id TEXT UNIQUE REFERENCES delivery_requests(id) ON DELETE SET NULL,
     amount_cents INTEGER NOT NULL,currency TEXT NOT NULL DEFAULT 'cad',status TEXT NOT NULL DEFAULT 'unpaid',
@@ -225,6 +227,7 @@ export function createStore(path = 'livraison.sqlite') {
       return {quoteId:qid,pickup:p.pickup,destination:p.destination,pickupPostalCode:p.pickupPostalCode,destinationPostalCode:p.destinationPostalCode,readyAt:p.readyAt,...priced,subtotalCents:priced.totalCents,gstCents:taxes.gstCents,qstCents:taxes.qstCents,totalCents:taxes.totalWithTaxesCents,expiresAt};
     },
     createRequest(p,restaurant=null,{awaitPayment=false}={}) {
+      if(awaitPayment)fail(p.acceptTerms!==true||p.termsVersion!==TERMS_VERSION,400,'Lee y acepta los términos y condiciones para continuar / Lisez et acceptez les conditions du service pour continuer');
       if(restaurant)fail(restaurant.role!=='restaurant',403,'Acceso restaurante / Accès restaurant');
       fail(p.consent!==true,400,'Autoriza el uso de los datos para organizar la entrega / Autorisez l’utilisation des coordonnées pour organiser la livraison');
       fail(typeof p.submissionId!=='string'||! /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(p.submissionId),400,'Solicitud incorrecta / Demande invalide');
@@ -260,6 +263,7 @@ export function createStore(path = 'livraison.sqlite') {
         pickup,destination,recipient_name,recipient_phone,item_description,ready_at,notes,created_at,quote_id,status_token_hash,accepted_at,tip_cents,pickup_postal_code,destination_postal_code) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         rid,p.submissionId,p.requesterName.trim(),contactName.trim(),contactPhone.trim(),email.trim(),p.pickup.trim(),p.destination.trim(),
         p.recipientName.trim(),p.recipientPhone.trim(),p.itemDescription.trim(),ready?new Date(ready).toISOString():'',notes.trim(),Date.now(),quote.id,hash(p.statusToken),Date.now(),tipCents,p.pickupPostalCode,p.destinationPostalCode);
+        if(awaitPayment)run('UPDATE delivery_requests SET terms_version=?,terms_content_sha256=?,terms_accepted_at=? WHERE id=?',TERMS_VERSION,TERMS_CONTENT_SHA256,Date.now(),rid);
         if(restaurant)run('UPDATE delivery_requests SET restaurant_user_id=? WHERE id=?',restaurant.id,rid);
         if(awaitPayment){
           run("UPDATE delivery_requests SET payment_state='awaiting_payment' WHERE id=?",rid);

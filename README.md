@@ -127,3 +127,8 @@ Los correos se procesan en el servidor, con colas SQLite separadas y hasta cinco
 Ambos utilizan SMTP existente y `REQUEST_NOTIFICATION_EMAIL` (por defecto `serviceclient@toutaunclicla.com`). `QUOTE_EMAIL_ENABLED=false` desactiva solo los avisos de cotización; `REQUEST_EMAIL_ENABLED=false` desactiva los avisos de solicitudes y cotizaciones. Las colas se procesan al generarse el evento y cada 30 segundos. Un reinicio no vuelve a enviar los mensajes ya marcados como enviados. La aceptación SMTP no garantiza recepción en bandeja de entrada.
 
 Rechazar una solicitud pagada no reembolsa automáticamente: el administrador debe tramitar el reembolso desde Stripe y comprobarlo. No se ha agregado Stripe Connect ni pago automático a repartidores. Probar Checkout y verificar una entrega real de ambos correos antes de activar cobros de producción.
+
+
+## Service terms acceptance
+
+The immutable public `/terms/2026-10-23-v1` page reproduces the Spanish policy document dated 23 October 2026. `/conditions` links to the same page. An unchecked checkbox requires explicit acceptance and a declaration about lawful contents before Checkout. The server rejects new payment-required requests without acceptance of the current version, and records the version, policy text SHA-256 and server acceptance timestamp. Existing requests are not retroactively marked as accepted. Live Stripe activation requires matching live-mode secret and webhook keys in Render; storing this code alone does not switch payment modes. Preserve this immutable page when publishing future revisions.
