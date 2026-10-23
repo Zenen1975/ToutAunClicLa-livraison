@@ -16,9 +16,9 @@ export function requestMessage(job,config){
  const ready=job.ready_at?new Date(job.ready_at).toLocaleString('fr-CA',{timeZone:'America/Toronto'}):'Dès que possible / Lo antes posible';
  const fields=[['Référence / Referencia',reference],['Nom du demandeur ou de l’entreprise / Nombre del solicitante o negocio',job.requester_name],['Collecte / Recogida',job.pickup],['Livraison / Destino',job.destination],['Collecte souhaitée / Recogida solicitada',ready],['Envoi / Envío',job.item_description],['Prix confirmé, taxes incluses / Precio confirmado, tasas incluidas',price(total)],['Pourboire inclus dans le total / Propina incluida en el total',price(job.tip_cents)]];
  const url=config.appUrl+'/';
- const intro='Une nouvelle demande de livraison attend votre attribution. / Tienes una nueva solicitud de livraison pendiente de asignar.';
+ const intro=(job.payment_state==='paid'?'Paiement Stripe confirmé / Pago Stripe confirmado. ':'')+'Une nouvelle demande de livraison attend votre attribution. / Tienes una nueva solicitud de livraison pendiente de asignar.';
  return {from:{name:'ToutAunClicLa · Livraison',address:config.from},to:{name:'ToutAunClicLa · Service client',address:config.recipient},
-  subject:'Nouvelle demande de livraison / Nueva solicitud de livraison · '+reference,
+  subject:(job.payment_state==='paid'?'Paiement confirmé / Pago confirmado · ':'')+'Nouvelle demande de livraison / Nueva solicitud de livraison · '+reference,
   messageId:`<request-${job.request_id}@${config.from.split('@')[1]}>`,
   text:intro+'\n\n'+fields.map(([label,value])=>label+': '+value).join('\n')+'\n\nOuvrir le panneau / Abrir el panel: '+url,
   html:'<!doctype html><html><body style="margin:0;padding:24px;background:#f7f5fb;font:16px Arial,sans-serif;color:#292239"><main style="max-width:600px;margin:auto;padding:24px;background:white;border-radius:16px"><h1 style="font-size:22px;color:#572794">ToutAunClicLa</h1><p>'+h(intro)+'</p>'+fields.map(([label,value])=>'<p><strong>'+h(label)+'</strong><br>'+h(value)+'</p>').join('')+'<p><a href="'+h(url)+'" style="display:inline-block;background:#6332a0;color:white;text-decoration:none;padding:14px 22px;border-radius:8px">Ouvrir le panneau / Abrir el panel</a></p><p>Connexion administrateur requise / Acceso de administrador requerido.</p></main></body></html>',
@@ -33,8 +33,8 @@ export function createRequestMailer(store,{env=process.env,send,now=Date.now,log
   try{
    if(!sender){const {default:nodemailer}=await import('nodemailer');const transport=nodemailer.createTransport({host:config.host,port:config.port,secure:config.port===465,requireTLS:config.port===587,auth:{user:config.user,pass:config.password},connectionTimeout:10000,greetingTimeout:10000,socketTimeout:15000,disableFileAccess:true,disableUrlAccess:true});sender=message=>transport.sendMail(message)}
    const at=now();
-   store.db.prepare(`UPDATE request_emails SET skipped_at=? WHERE sent_at IS NULL AND skipped_at IS NULL AND request_id IN (SELECT id FROM delivery_requests WHERE status!='pending' OR created_at<?)`).run(at,at-86400000);
-   const jobs=store.db.prepare(`SELECT e.*,r.requester_name,r.pickup,r.destination,r.ready_at,r.item_description,r.tip_cents,q.total_cents,q.gst_cents,q.qst_cents
+   store.db.prepare(`UPDATE request_emails SET skipped_at=? WHERE sent_at IS NULL AND skipped_at IS NULL AND request_id IN (SELECT id FROM delivery_requests WHERE status!='pending' OR COALESCE((SELECT paid_at FROM request_payments WHERE request_id=delivery_requests.id),created_at)<?)`).run(at,at-86400000);
+   const jobs=store.db.prepare(`SELECT e.*,r.payment_state,r.requester_name,r.pickup,r.destination,r.ready_at,r.item_description,r.tip_cents,q.total_cents,q.gst_cents,q.qst_cents
     FROM request_emails e JOIN delivery_requests r ON r.id=e.request_id JOIN delivery_quotes q ON q.id=r.quote_id
     WHERE e.sent_at IS NULL AND e.skipped_at IS NULL AND e.attempts<5 AND e.next_attempt_at<=? ORDER BY r.created_at LIMIT 5`).all(at);
    for(const job of jobs){

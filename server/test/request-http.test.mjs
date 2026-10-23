@@ -4,14 +4,16 @@ import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {stripeFixture} from './stripe-fixture.mjs';
 import {createStore} from '../core.mjs';
 
 test('HTTP quote → accepted price and tip → admin assignment → restaurant status and driver earnings is private and durable',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'tacl-request-http-'));process.env.DATABASE_PATH=join(dir,'test.sqlite');process.env.ASSIGNMENT_EMAIL_ENABLED='false';process.env.REQUEST_EMAIL_ENABLED='false';process.env.PASSWORD_RESET_EMAIL_ENABLED='false';process.env.GOOGLE_ROUTES_API_KEY='test-only-key';
  const store=createStore(process.env.DATABASE_PATH),password='test-password-123';
  const admin=store.createUser({name:'Admin',email:'admin@example.test',password,role:'admin'}),driver=store.createUser({name:'Driver',email:'driver@example.test',password});
- const realFetch=globalThis.fetch;
+ const realFetch=globalThis.fetch,stripe=stripeFixture();
  globalThis.fetch=async(url,options)=>{
+  if(url==='https://api.stripe.com/v1/checkout/sessions')return stripe.respond(url,options);
   assert.equal(url,'https://routes.googleapis.com/directions/v2:computeRoutes');assert.equal(options.headers['X-Goog-Api-Key'],'test-only-key');return {ok:true,json:async()=>({routes:[{distanceMeters:5000,duration:'2100s',staticDuration:'900s'}]})};
  };
  const {server}=await import('../server.mjs');await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;
@@ -21,11 +23,18 @@ test('HTTP quote → accepted price and tip → admin assignment → restaurant 
   assert.equal((await api('/requests')).status,401);
   const route={pickup:'123 Test Montréal',destination:'456 Test Longueuil',contactPhone:'5145550100',pickupPostalCode:'H2X 1Y4',destinationPostalCode:'J4K 1A1'};
   delete process.env.GOOGLE_ROUTES_API_KEY;assert.equal((await api('/quotes',{body:route})).status,503);process.env.GOOGLE_ROUTES_API_KEY='test-only-key';
-  const q=await api('/quotes',{body:route});assert.equal(q.status,201);assert.equal(q.data.totalCents,1605);assert.ok(!JSON.stringify(q).includes('test-only-key'));
+  const q=await api('/quotes',{body:route});assert.equal(q.status,201);assert.equal(q.data.totalCents,1605);assert.equal(store.quoteActivity(admin).length,1);assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM quote_emails').get().n,1);assert.ok(!JSON.stringify(q).includes('test-only-key'));
   const {contactPhone:removedPhone,...requestRoute}=route;
   const body={...requestRoute,quoteId:q.data.quoteId,consent:true,acceptPrice:true,tipCents:500,submissionId:randomUUID(),statusToken:'cd'.repeat(32),requesterName:'Restaurant',recipientName:'Recipient',recipientPhone:'4505550101',itemDescription:'Repas'};
   assert.equal((await api('/requests',{body:{...body,acceptPrice:false}})).status,400);
-  const accepted=await api('/requests',{body});assert.equal(accepted.status,201);assert.deepEqual((await api('/requests',{body})).data,accepted.data);assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM request_emails').get().n,1);
+  const accepted=await api('/requests',{body});assert.equal(accepted.status,201);assert.deepEqual((await api('/requests',{body})).data,accepted.data);assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM request_emails').get().n,0);
+  assert.equal(store.requests(admin).length,0);
+  assert.throws(()=>store.createDelivery(admin,{requestId:accepted.data.id,driverId:driver.id}),/Pago pendiente/);
+  assert.equal((await stripe.pay(realFetch,base,accepted.data.id,{},'t=1,v1=bad')).status,400);
+  assert.equal((await stripe.pay(realFetch,base,accepted.data.id,{amount_total:1})).status,400);
+  assert.equal((await stripe.pay(realFetch,base,accepted.data.id)).status,200);
+  assert.equal((await stripe.pay(realFetch,base,accepted.data.id)).status,200);
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM request_emails').get().n,1);
   const statusPath='/request-status/'+accepted.data.id;
   assert.equal((await api(statusPath)).status,404);assert.equal((await api(statusPath,{token:'wrong'})).status,404);
   const pending=await api(statusPath,{token:body.statusToken});assert.equal(pending.data.status,'pending');assert.equal(pending.data.totalCents,2105);assert.ok(!JSON.stringify(pending).includes(body.recipientPhone));
