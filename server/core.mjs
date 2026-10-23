@@ -42,6 +42,10 @@ export function createStore(path = 'livraison.sqlite') {
   const requestColumns=new Set(db.prepare('PRAGMA table_info(delivery_requests)').all().map(c=>c.name));
   for(const [name,type]of [['quote_id','TEXT REFERENCES delivery_quotes(id)'],['status_token_hash','TEXT'],['accepted_at','INTEGER'],['tip_cents','INTEGER NOT NULL DEFAULT 0']])if(!requestColumns.has(name))db.exec('ALTER TABLE delivery_requests ADD COLUMN '+name+' '+type);
   if(!requestColumns.has('restaurant_user_id'))db.exec('ALTER TABLE delivery_requests ADD COLUMN restaurant_user_id TEXT REFERENCES users(id)');
+  if(!requestColumns.has('payment_state'))db.exec("ALTER TABLE delivery_requests ADD COLUMN payment_state TEXT NOT NULL DEFAULT 'legacy'");
+  db.exec(`CREATE TABLE IF NOT EXISTS request_payments(id TEXT PRIMARY KEY,request_id TEXT UNIQUE REFERENCES delivery_requests(id) ON DELETE SET NULL,
+    amount_cents INTEGER NOT NULL,currency TEXT NOT NULL DEFAULT 'cad',status TEXT NOT NULL DEFAULT 'unpaid',
+    session_id TEXT UNIQUE,checkout_url TEXT,expires_at INTEGER,created_at INTEGER NOT NULL,paid_at INTEGER);`);
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS delivery_requests_quote ON delivery_requests(quote_id)');
   if(!db.prepare('PRAGMA table_info(deliveries)').all().some(c=>c.name==='batch_id'))db.exec('ALTER TABLE deliveries ADD COLUMN batch_id TEXT');
   const deliveryColumns=new Set(db.prepare('PRAGMA table_info(deliveries)').all().map(c=>c.name));
@@ -52,6 +56,9 @@ export function createStore(path = 'livraison.sqlite') {
   db.exec("UPDATE deliveries SET completed_at=created_at WHERE status='delivered' AND completed_at IS NULL");
   db.exec('CREATE INDEX IF NOT EXISTS deliveries_completed ON deliveries(status,completed_at); CREATE INDEX IF NOT EXISTS restaurant_request_owner ON delivery_requests(restaurant_user_id,created_at)');
   const quoteColumns=new Set(db.prepare('PRAGMA table_info(delivery_quotes)').all().map(c=>c.name));
+  if(!quoteColumns.has('public_quote'))db.exec('ALTER TABLE delivery_quotes ADD COLUMN public_quote INTEGER NOT NULL DEFAULT 0');
+  db.exec(`CREATE TABLE IF NOT EXISTS quote_emails(quote_id TEXT PRIMARY KEY REFERENCES delivery_quotes(id) ON DELETE CASCADE,
+    attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL,sent_at INTEGER,skipped_at INTEGER,last_error TEXT);`);
   for(const name of ['gst_cents','qst_cents','tax_version'])if(!quoteColumns.has(name))db.exec('ALTER TABLE delivery_quotes ADD COLUMN '+name+' INTEGER NOT NULL DEFAULT 0');
   for(const name of ['pickup_postal_code','destination_postal_code']){
     if(!requestColumns.has(name))db.exec('ALTER TABLE delivery_requests ADD COLUMN '+name+" TEXT NOT NULL DEFAULT ''");
@@ -92,7 +99,7 @@ export function createStore(path = 'livraison.sqlite') {
     },
     restaurantRequests(u){
       fail(u.role!=='restaurant',403,'Acceso restaurante / Accès restaurant');store.pruneHistory();
-      return db.prepare(`SELECT r.id,r.pickup,r.destination,r.recipient_name,r.created_at,r.status,d.status AS delivery_status,d.completed_at,
+      return db.prepare(`SELECT r.id,r.pickup,r.destination,r.recipient_name,r.created_at,CASE WHEN r.payment_state='awaiting_payment' THEN 'awaiting_payment' ELSE r.status END AS status,d.status AS delivery_status,d.completed_at,
         q.total_cents+q.gst_cents+q.qst_cents+r.tip_cents AS total_cents FROM delivery_requests r
         LEFT JOIN deliveries d ON d.id=r.delivery_id JOIN delivery_quotes q ON q.id=r.quote_id WHERE r.restaurant_user_id=? ORDER BY r.created_at DESC`).all(u.id);
     },
@@ -202,15 +209,22 @@ export function createStore(path = 'livraison.sqlite') {
       return u.role==='admin' ? db.prepare(sql+" WHERE d.status!='delivered' OR d.completed_at>? ORDER BY d.created_at DESC").all(cutoff)
         : db.prepare(sql+" WHERE d.driver_id=? AND (d.status!='delivered' OR d.completed_at>?) ORDER BY d.created_at DESC").all(u.id,cutoff);
     },
-    saveQuote(p) {
+    quoteActivity(u){
+      admin(u);
+      return db.prepare(`SELECT q.id,q.pickup,q.destination,q.created_at,q.total_cents+q.gst_cents+q.qst_cents AS total_cents,
+        COALESCE(r.payment_state,'quoted') AS payment_state FROM delivery_quotes q LEFT JOIN delivery_requests r ON r.quote_id=q.id
+        WHERE q.public_quote=1 AND q.created_at>? ORDER BY q.created_at DESC LIMIT 50`).all(Date.now()-86400000);
+    },
+    saveQuote(p,{publicQuote=false}={}) {
       p={...p,...routeInput(p)};
       const priced=priceRoute(p),qid=id(),now=Date.now(),expiresAt=now+600000;
       const taxes=deliveryTaxes(priced.totalCents);
       run(`INSERT INTO delivery_quotes(id,pickup,destination,ready_at,distance_meters,duration_seconds,baseline_seconds,distance_cents,traffic_cents,total_cents,expires_at,created_at,pickup_postal_code,destination_postal_code,gst_cents,qst_cents,tax_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,qid,p.pickup,p.destination,p.readyAt,
         priced.distanceMeters,priced.durationSeconds,priced.baselineSeconds,priced.distanceCents,priced.trafficCents,priced.totalCents,expiresAt,now,p.pickupPostalCode,p.destinationPostalCode,taxes.gstCents,taxes.qstCents,1);
+      if(publicQuote){run('UPDATE delivery_quotes SET public_quote=1 WHERE id=?',qid);run('INSERT INTO quote_emails(quote_id,next_attempt_at) VALUES(?,?)',qid,now);}
       return {quoteId:qid,pickup:p.pickup,destination:p.destination,pickupPostalCode:p.pickupPostalCode,destinationPostalCode:p.destinationPostalCode,readyAt:p.readyAt,...priced,subtotalCents:priced.totalCents,gstCents:taxes.gstCents,qstCents:taxes.qstCents,totalCents:taxes.totalWithTaxesCents,expiresAt};
     },
-    createRequest(p,restaurant=null) {
+    createRequest(p,restaurant=null,{awaitPayment=false}={}) {
       if(restaurant)fail(restaurant.role!=='restaurant',403,'Acceso restaurante / Accès restaurant');
       fail(p.consent!==true,400,'Autoriza el uso de los datos para organizar la entrega / Autorisez l’utilisation des coordonnées pour organiser la livraison');
       fail(typeof p.submissionId!=='string'||! /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(p.submissionId),400,'Solicitud incorrecta / Demande invalide');
@@ -247,29 +261,48 @@ export function createStore(path = 'livraison.sqlite') {
         rid,p.submissionId,p.requesterName.trim(),contactName.trim(),contactPhone.trim(),email.trim(),p.pickup.trim(),p.destination.trim(),
         p.recipientName.trim(),p.recipientPhone.trim(),p.itemDescription.trim(),ready?new Date(ready).toISOString():'',notes.trim(),Date.now(),quote.id,hash(p.statusToken),Date.now(),tipCents,p.pickupPostalCode,p.destinationPostalCode);
         if(restaurant)run('UPDATE delivery_requests SET restaurant_user_id=? WHERE id=?',restaurant.id,rid);
-        run('INSERT INTO request_emails(request_id,next_attempt_at) VALUES(?,?)',rid,Date.now());
+        if(awaitPayment){
+          run("UPDATE delivery_requests SET payment_state='awaiting_payment' WHERE id=?",rid);
+          run('INSERT INTO request_payments(id,request_id,amount_cents,created_at) VALUES(?,?,?,?)',rid,rid,quote.total_cents+quote.gst_cents+quote.qst_cents+tipCents,Date.now());
+        }else run('INSERT INTO request_emails(request_id,next_attempt_at) VALUES(?,?)',rid,Date.now());
         db.exec('COMMIT');
       }catch(error){db.exec('ROLLBACK');throw error;}
       return {id:rid,reference:'TAC-'+rid.slice(0,12).toUpperCase()};
     },
     requestStatus(rid,token) {
-      const r=one(`SELECT r.id,r.status,r.status_token_hash,r.tip_cents,d.status AS delivery_status,u.name AS driver_name,q.total_cents,q.gst_cents,q.qst_cents
+      const r=one(`SELECT r.id,r.status,r.payment_state,r.status_token_hash,r.tip_cents,d.status AS delivery_status,u.name AS driver_name,q.total_cents,q.gst_cents,q.qst_cents
         FROM delivery_requests r LEFT JOIN deliveries d ON d.id=r.delivery_id LEFT JOIN users u ON u.id=d.driver_id
         LEFT JOIN delivery_quotes q ON q.id=r.quote_id WHERE r.id=?`,rid);
       fail(!r||!r.status_token_hash||r.status_token_hash!==hash(token||''),404,'Solicitud no encontrada / Demande introuvable');
-      return {reference:'TAC-'+r.id.slice(0,12).toUpperCase(),status:r.status==='assigned'?r.delivery_status:r.status,driverName:r.driver_name||'',deliveryFareCents:r.total_cents,gstCents:r.gst_cents,qstCents:r.qst_cents,tipCents:r.tip_cents,totalCents:r.total_cents+r.gst_cents+r.qst_cents+r.tip_cents,currency:'CAD'};
+      const payment=one('SELECT status,checkout_url,expires_at FROM request_payments WHERE request_id=?',rid);
+      return {reference:'TAC-'+r.id.slice(0,12).toUpperCase(),status:r.payment_state==='awaiting_payment'?'awaiting_payment':r.status==='assigned'?r.delivery_status:r.status,paymentStatus:payment?.status||'legacy',checkoutUrl:payment?.status==='unpaid'&&payment.expires_at>Date.now()?payment.checkout_url:null,driverName:r.driver_name||'',deliveryFareCents:r.total_cents,gstCents:r.gst_cents,qstCents:r.qst_cents,tipCents:r.tip_cents,totalCents:r.total_cents+r.gst_cents+r.qst_cents+r.tip_cents,currency:'CAD'};
+    },
+    confirmPayment(session){
+      const payment=one('SELECT * FROM request_payments WHERE id=?',session.metadata?.request_id||'');
+      if(!payment||!payment.request_id)return {ignored:true};
+      fail(session.mode!=='payment'||session.payment_status!=='paid'||session.currency!=='cad'||session.amount_total!==payment.amount_cents||session.client_reference_id!==payment.id||typeof session.id!=='string'||!session.id.startsWith('cs_')||(payment.session_id&&payment.session_id!==session.id),400,'Pago incompatible / Paiement incompatible');
+      if(payment.status==='paid')return {duplicate:true};
+      db.exec('BEGIN IMMEDIATE');
+      try{
+        run("UPDATE request_payments SET status='paid',session_id=?,paid_at=? WHERE id=? AND status!='paid'",session.id,Date.now(),payment.id);
+        run("UPDATE delivery_requests SET payment_state='paid' WHERE id=? AND payment_state='awaiting_payment'",payment.request_id);
+        run('INSERT OR IGNORE INTO request_emails(request_id,next_attempt_at) VALUES(?,?)',payment.request_id,Date.now());
+        db.exec('COMMIT');
+      }catch(e){db.exec('ROLLBACK');throw e;}
+      return {paid:true};
     },
     requests(u) {
       admin(u);store.pruneHistory();
       return db.prepare(`SELECT r.*,d.status AS delivery_status,d.commission_cents,d.driver_payout_cents,q.total_cents,q.gst_cents,q.qst_cents,q.distance_meters,q.distance_cents,q.traffic_cents,q.duration_seconds,q.baseline_seconds
         FROM delivery_requests r LEFT JOIN deliveries d ON d.id=r.delivery_id LEFT JOIN delivery_quotes q ON q.id=r.quote_id
-        WHERE d.id IS NULL OR d.status!='delivered' OR d.completed_at>?
+        WHERE r.payment_state IN ('legacy','paid') AND (d.id IS NULL OR d.status!='delivered' OR d.completed_at>?)
         ORDER BY CASE WHEN r.status='pending' THEN 0 ELSE 1 END,r.created_at DESC`).all(Date.now()-5*86400000).map(({submission_id,status_token_hash,...r})=>({...r,reference:'TAC-'+r.id.slice(0,12).toUpperCase()}));
     },
     declineRequest(u,rid) {
       admin(u);
       const r=one('SELECT * FROM delivery_requests WHERE id=?',rid);
       fail(!r,404,'Solicitud no encontrada / Demande introuvable');
+      fail(r.payment_state==='awaiting_payment',409,'Pago pendiente / Paiement en attente');
       fail(r.status!=='pending',409,'Solicitud ya procesada / Demande déjà traitée');
       run("UPDATE delivery_requests SET status='declined',reviewed_at=? WHERE id=? AND status='pending'",Date.now(),rid);
       return {ok:true};
@@ -296,6 +329,7 @@ export function createStore(path = 'livraison.sqlite') {
       const request=p.requestId?one('SELECT * FROM delivery_requests WHERE id=?',p.requestId):null;
       if(p.requestId){
         fail(!request,404,'Solicitud no encontrada / Demande introuvable');
+        fail(request.payment_state==='awaiting_payment',409,'Pago pendiente / Paiement en attente');
         fail(request.status!=='pending',409,'Solicitud ya procesada / Demande déjà traitée');
         p={...p,pickup:request.pickup,destination:request.destination};
       }

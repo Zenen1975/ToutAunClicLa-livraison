@@ -102,3 +102,28 @@ Los avisos de solicitudes pendientes se reintentan hasta cinco veces con espera 
 - `/forgot-password` envía un enlace al correo registrado. `/reset-password` permite elegir y confirmar una contraseña de 12–200 caracteres. El token aleatorio solo se guarda como hash, vence en 30 minutos y se invalida al usarlo; se revocan todas las sesiones y el GPS anterior. La respuesta de solicitud no revela si existe una cuenta. Hay un minuto de espera entre enlaces, máximo tres por correo en la ventana de uso, y un límite de solicitudes de recuperación por conexión. No se modifica ninguna contraseña hasta que el titular complete el formulario. Usa SMTP y `PUBLIC_APP_URL`; `PASSWORD_RESET_EMAIL_ENABLED=false` lo desactiva para pruebas. Los enlaces usan fragmentos, se retiran de la barra al cargar y las páginas no envían Referer. No se guardan tokens de recuperación en texto claro ni se envían contraseñas por correo. Un envío SMTP fallido requiere solicitar un nuevo enlace.
 - Una entrega terminada conserva su fecha `completed_at`. Administrador y livreur ven los últimos 5 días; una cuenta de restaurante conserva sus entregas 10 días. La limpieza se ejecuta al arrancar, cada minuto y al consultar el historial. Se eliminan también las solicitudes y avisos vinculados cuando vence el plazo del registro. Las entregas compartidas con un restaurante se guardan hasta el día 10 aunque ya no aparezcan en administrador/livreur desde el día 5. Las entregas activas no se borran por antigüedad. Las entregas antiguas que no tenían fecha de finalización usan su fecha de creación como referencia de migración. Las cuentas, perfiles y credenciales no se borran con el historial.
 - Las pruebas verifican aislamiento entre roles, conservación de datos activos, límites de 5/10 días, integridad de referencias, contraseña nueva, rechazo de la antigua, caducidad y uso único del enlace y cierre de sesiones. Los tests HTTP desactivan los envíos SMTP reales.
+
+## Stripe y avisos de cotización y pago
+
+El cliente calcula el precio, acepta el total CAD (TPS, TVQ y propina seleccionada) y continúa a Stripe Checkout. El servidor calcula el importe; no utiliza un importe enviado por el navegador. La nueva solicitud solo aparece para asignación después de un evento Stripe firmado con estado `paid`, moneda e importe correctos. Volver a la página de éxito o cancelar Checkout no confirma un pago. Los pagos y eventos repetidos reutilizan la solicitud y la notificación existentes.
+
+Configurar como variables privadas en Render, sin incorporarlas al repositorio:
+
+- `STRIPE_SECRET_KEY`: clave secreta del mismo entorno Stripe que se usará para cobrar.
+- `STRIPE_WEBHOOK_SECRET`: secreto de firma del destino de eventos de esta aplicación.
+- `PUBLIC_APP_URL`: `https://livraison.toutaunclicla.com`.
+
+En Stripe crear un destino de eventos para `https://livraison.toutaunclicla.com/stripe/webhook`, con los eventos `checkout.session.completed` y `checkout.session.async_payment_succeeded`. Usar primero claves y eventos de prueba; para producción sustituir ambos secretos por los del entorno real. Nunca introducir claves en el HTML ni enviarlas por correo o chat. Sin configuración de pagos, las nuevas confirmaciones públicas devuelven 503 y no crean solicitudes sin cobrar. Las asignaciones manuales del administrador conservan su flujo propio; las solicitudes anteriores se identifican como anteriores al pago en línea.
+
+La sesión Checkout mantiene el total aceptado durante aproximadamente 31 minutos y se reutiliza en los reintentos. Una vez vencida, debe iniciarse otra solicitud. El seguimiento protegido permite retomar un enlace de pago abierto; no habilita asignación hasta confirmar el pago.
+
+El administrador dispone de dos secciones: últimas 50 cotizaciones públicas de las últimas 24 horas y solicitudes pagadas. Las alarmas tienen tonos distintos y requieren activar el sonido con un botón. El panel consulta cada 12 segundos; pestañas suspendidas, cerradas o sin Internet no garantizan reproducción ni aviso inmediato.
+
+Los correos se procesan en el servidor, con colas SQLite separadas y hasta cinco intentos, aunque el administrador esté desconectado:
+
+- Cotización calculada: indica expresamente que el aviso no confirma pago; muestra precio con impuestos y sin propina. No crea una entrega asignable.
+- Pago Stripe confirmado: indica que la entrega está lista para asignar; incluye el total realmente cobrado y la propina.
+
+Ambos utilizan SMTP existente y `REQUEST_NOTIFICATION_EMAIL` (por defecto `serviceclient@toutaunclicla.com`). `QUOTE_EMAIL_ENABLED=false` desactiva solo los avisos de cotización; `REQUEST_EMAIL_ENABLED=false` desactiva los avisos de solicitudes y cotizaciones. Las colas se procesan al generarse el evento y cada 30 segundos. Un reinicio no vuelve a enviar los mensajes ya marcados como enviados. La aceptación SMTP no garantiza recepción en bandeja de entrada.
+
+Rechazar una solicitud pagada no reembolsa automáticamente: el administrador debe tramitar el reembolso desde Stripe y comprobarlo. No se ha agregado Stripe Connect ni pago automático a repartidores. Probar Checkout y verificar una entrega real de ambos correos antes de activar cobros de producción.

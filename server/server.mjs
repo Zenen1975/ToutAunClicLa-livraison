@@ -7,9 +7,12 @@ import {checkEmail} from './email-check.mjs';
 import {computeQuote} from './routes.mjs';
 import {createRequestMailer} from './request-mail.mjs';
 import {createPasswordMailer} from './password-mail.mjs';
+import {createQuoteMailer} from './quote-mail.mjs';
+import {checkout,paymentConfig,verifyStripeEvent} from './payments.mjs';
 const store=createStore(process.env.DATABASE_PATH || 'livraison.sqlite');
 const mailer=createAssignmentMailer(store);
 const requestMailer=createRequestMailer(store);
+const quoteMailer=createQuoteMailer(store);
 const passwordMailer=createPasswordMailer();
 let retentionTimer;
 const securityAttempts=new Map();
@@ -50,6 +53,15 @@ export const server=http.createServer(async(req,res)=>{
     }
     if(['GET','HEAD'].includes(req.method)&&path==='/livreur-team-v1.webp'){res.writeHead(200,{'Content-Type':'image/webp','Content-Length':driverPortrait.length,'Cache-Control':'public, max-age=86400'});res.end(req.method==='HEAD'?undefined:driverPortrait);return;}
     if(req.method==='GET'&&path==='/health'){send(200,{ok:true});return;}
+    if(req.method==='POST'&&path==='/stripe/webhook'){
+      const config=paymentConfig();const chunks=[];let length=0;
+      for await(const chunk of req){length+=chunk.length;if(length>1048576)throw new Problem(413,'Evento demasiado grande');chunks.push(chunk)}
+      const event=verifyStripeEvent(Buffer.concat(chunks),req.headers['stripe-signature'],config);
+      if(['checkout.session.completed','checkout.session.async_payment_succeeded'].includes(event.type)&&event.data?.object?.payment_status==='paid'){
+        store.confirmPayment(event.data.object);void requestMailer.flush();
+      }
+      send(200,{received:true});return;
+    }
     let p={};
     if(['POST','PATCH'].includes(req.method)) {
       let raw=''; for await (const chunk of req){raw+=chunk; if(Buffer.byteLength(raw)>16384)throw new Problem(413,'Solicitud demasiado grande');}
@@ -83,11 +95,13 @@ export const server=http.createServer(async(req,res)=>{
       if(requestAttempts.size>1000)for(const [k,v]of requestAttempts)if(now-v.start>600000)requestAttempts.delete(k);
       let a=requestAttempts.get(key);if(!a||now-a.start>600000){a={start:now,count:0};requestAttempts.set(key,a);}
       if(++a.count>10)throw new Problem(429,'Demasiadas solicitudes. Espera 10 minutos / Trop de demandes. Attendez 10 minutes');
-      if(path==='/quotes')send(201,store.saveQuote(await computeQuote(p)));
+      if(path==='/quotes'){send(201,store.saveQuote(await computeQuote(p),{publicQuote:true}));void quoteMailer.flush();}
       else {
         let restaurant=null;
         if(req.headers.authorization?.replace(/^Bearer(?:\s+|$)/,'').trim()){restaurant=store.authenticate(req.headers.authorization.replace(/^Bearer /,''));if(restaurant.role!=='restaurant')throw new Problem(403,'Acceso restaurante / Accès restaurant');p.requesterName=restaurant.name;}
-        send(201,store.createRequest(p,restaurant));void requestMailer.flush();
+        paymentConfig();
+        const request=store.createRequest(p,restaurant,{awaitPayment:true});
+        send(201,await checkout(store,request,p.statusToken));
       }
       return;
     }
@@ -105,7 +119,8 @@ export const server=http.createServer(async(req,res)=>{
     else if(req.method==='GET'&&path==='/drivers')data=store.drivers(u);
     else if(req.method==='GET'&&path==='/config'){
       if(u.role!=='admin')throw new Problem(403,'Acceso denegado');
-      data={mapsKey:process.env.GOOGLE_MAPS_BROWSER_KEY || '',quotesConfigured:!!process.env.GOOGLE_ROUTES_API_KEY?.trim(),requestNotifications:requestMailer.status()};
+      let paymentsConfigured=false;try{paymentConfig();paymentsConfigured=true}catch{}
+      data={mapsKey:process.env.GOOGLE_MAPS_BROWSER_KEY || '',quotesConfigured:!!process.env.GOOGLE_ROUTES_API_KEY?.trim(),requestNotifications:requestMailer.status(),quoteNotifications:quoteMailer.status(),paymentsConfigured};
     }
     else if(req.method==='POST'&&path==='/email/check'){
       if(u.role!=='admin')throw new Problem(403,'Acceso denegado / Accès refusé');
@@ -131,6 +146,7 @@ export const server=http.createServer(async(req,res)=>{
     else if(req.method==='GET'&&path==='/restaurant/requests')data=store.restaurantRequests(u);
     else if(req.method==='GET'&&path==='/deliveries')data=store.deliveries(u);
     else if(req.method==='GET'&&path==='/requests')data=store.requests(u);
+    else if(req.method==='GET'&&path==='/admin/quote-activity')data=store.quoteActivity(u);
     else if(req.method==='PATCH'&&/^\/requests\/[a-f0-9]{48}$/.test(path)){
       if(u.role!=='admin')throw new Problem(403,'Acceso denegado / Accès refusé');
       const requestId=path.split('/')[2];
@@ -152,7 +168,7 @@ export const server=http.createServer(async(req,res)=>{
     send(200,data);
   }catch(e){send(e.status || 500,{error:e.status?e.message:'Error del servidor / Erreur serveur'});if(!e.status)console.error(e);}
 });
-server.on('listening',()=>{store.pruneHistory();mailer.start();requestMailer.start();retentionTimer=setInterval(()=>{try{store.pruneHistory()}catch{console.error('No se pudo limpiar el historial de entregas.')}},60000);retentionTimer.unref()});
-server.on('close',()=>{clearInterval(retentionTimer);mailer.stop();requestMailer.stop()});
+server.on('listening',()=>{store.pruneHistory();mailer.start();requestMailer.start();quoteMailer.start();retentionTimer=setInterval(()=>{try{store.pruneHistory()}catch{console.error('No se pudo limpiar el historial de entregas.')}},60000);retentionTimer.unref()});
+server.on('close',()=>{clearInterval(retentionTimer);mailer.stop();requestMailer.stop();quoteMailer.stop()});
 if(process.argv[1]===fileURLToPath(import.meta.url))server.listen(Number(process.env.PORT || 8787),process.env.HOST || '127.0.0.1',()=>console.log('Panel: http://127.0.0.1:'+ (process.env.PORT || 8787)));
 
