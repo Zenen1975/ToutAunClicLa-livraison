@@ -71,6 +71,13 @@ test('HTTP quote → accepted price and tip → admin assignment → restaurant 
   assert.deepEqual((await api('/deliveries',{token:at,body:direct})).data,manual.data);
   assert.equal((await api('/deliveries',{token:at,body:{...direct,tipCents:500}})).status,409);
   assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM assignment_emails WHERE delivery_id=?').get(manual.data.id).n,1);
+  assert.equal((await api('/requests/'+accepted.data.id,{method:'DELETE'})).status,401);
+  assert.equal((await api('/requests/'+accepted.data.id,{token:dt,method:'DELETE'})).status,403);
+  assert.equal((await api('/requests/'+accepted.data.id,{token:at,method:'DELETE'})).status,409);
+  const abandoned=store.saveQuote({...route,distanceMeters:3500,durationSeconds:900,baselineSeconds:900},{publicQuote:true});store.db.prepare('UPDATE delivery_quotes SET created_at=? WHERE id=?').run(Date.now()-3600001,abandoned.quoteId);
+  assert.equal((await api('/admin/quote-activity/'+abandoned.quoteId,{token:dt,method:'DELETE'})).status,403);
+  assert.equal((await api('/admin/quote-activity/'+abandoned.quoteId,{token:at,method:'DELETE'})).status,200);
+  assert.ok(!store.quoteActivity(admin).some(q=>q.id===abandoned.quoteId));
   const reopened=createStore(process.env.DATABASE_PATH);assert.equal(reopened.deliveries(driver).find(d=>d.id===manual.data.id).driver_payout_cents,2056);reopened.db.close();
  }finally{globalThis.fetch=realFetch;await new Promise(r=>server.close(r));store.db.close();rmSync(dir,{recursive:true,force:true})}
 });
