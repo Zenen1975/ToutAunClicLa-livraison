@@ -19,7 +19,7 @@ test('HTTP quote → accepted price and tip → admin assignment → restaurant 
  const {server}=await import('../server.mjs');await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;
  async function api(path,{token='',body,method=body?'POST':'GET'}={}){const r=await realFetch(base+path,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});return {status:r.status,data:await r.json()}}
  try{
-  for(const path of ['/demander','/demander/','/solicitar','/solicitar/']){const r=await realFetch(base+path);assert.equal(r.status,200);const html=await r.text();assert.match(html,/id="calculate"/);assert.equal((html.match(/data-tip="/g)||[]).length,4);}
+  for(const path of ['/demander','/demander/','/solicitar','/solicitar/']){const r=await realFetch(base+path);assert.equal(r.status,200);const html=await r.text();assert.match(html,/id="calculate"/);assert.equal((html.match(/data-tip="/g)||[]).length,5);}
   assert.equal((await api('/requests')).status,401);
   const route={pickup:'123 Test Montréal',destination:'456 Test Longueuil',contactPhone:'5145550100',pickupPostalCode:'H2X 1Y4',destinationPostalCode:'J4K 1A1'};
   delete process.env.GOOGLE_ROUTES_API_KEY;assert.equal((await api('/quotes',{body:route})).status,503);process.env.GOOGLE_ROUTES_API_KEY='test-only-key';
@@ -71,6 +71,13 @@ test('HTTP quote → accepted price and tip → admin assignment → restaurant 
   assert.deepEqual((await api('/deliveries',{token:at,body:direct})).data,manual.data);
   assert.equal((await api('/deliveries',{token:at,body:{...direct,tipCents:500}})).status,409);
   assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM assignment_emails WHERE delivery_id=?').get(manual.data.id).n,1);
+  assert.equal((await api('/requests/'+accepted.data.id,{method:'DELETE'})).status,401);
+  assert.equal((await api('/requests/'+accepted.data.id,{token:dt,method:'DELETE'})).status,403);
+  assert.equal((await api('/requests/'+accepted.data.id,{token:at,method:'DELETE'})).status,409);
+  const abandoned=store.saveQuote({...route,distanceMeters:3500,durationSeconds:900,baselineSeconds:900},{publicQuote:true});store.db.prepare('UPDATE delivery_quotes SET created_at=? WHERE id=?').run(Date.now()-3600001,abandoned.quoteId);
+  assert.equal((await api('/admin/quote-activity/'+abandoned.quoteId,{token:dt,method:'DELETE'})).status,403);
+  assert.equal((await api('/admin/quote-activity/'+abandoned.quoteId,{token:at,method:'DELETE'})).status,200);
+  assert.ok(!store.quoteActivity(admin).some(q=>q.id===abandoned.quoteId));
   const reopened=createStore(process.env.DATABASE_PATH);assert.equal(reopened.deliveries(driver).find(d=>d.id===manual.data.id).driver_payout_cents,2056);reopened.db.close();
  }finally{globalThis.fetch=realFetch;await new Promise(r=>server.close(r));store.db.close();rmSync(dir,{recursive:true,force:true})}
 });

@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 
 function setup(){
- const nodes=new Map(),calls=[],sounds=[];let quoteNumber=0;
+ const nodes=new Map(),calls=[],sounds=[];let quoteNumber=0,confirmAllowed=true;const confirmations=[];
  function node(id=''){
   const classes=new Set();return {id,value:'',textContent:'',checked:false,disabled:false,style:{},dataset:{},children:[],options:[],
    classList:{add:c=>classes.add(c),remove:c=>classes.delete(c),toggle(c,on){on?classes.add(c):classes.delete(c)},contains:c=>classes.has(c)},
@@ -13,14 +13,14 @@ function setup(){
  const get=id=>{if(!nodes.has(id))nodes.set(id,node(id));return nodes.get(id)};
  get('adminTip').value='0';
  const document={getElementById:get,createElement:()=>node(),createTextNode:text=>({textContent:text}),querySelectorAll:()=>[],documentElement:{},head:{append(){}}};
- const context=vm.createContext({document,window:{AudioContext:class{currentTime=0;destination={};async resume(){} createOscillator(){return {frequency:{value:0},connect(){},start(){sounds.push(this.frequency.value)},stop(){}}}createGain(){return {connect(){},gain:{setValueAtTime(){},linearRampToValueAtTime(){},exponentialRampToValueAtTime(){}}}}}},Intl,Date,JSON,Number,String,Object,Array,Map,Set,Error,Promise,AbortSignal,encodeURIComponent,
+ const context=vm.createContext({document,window:{confirm(message){confirmations.push(message);return confirmAllowed},AudioContext:class{currentTime=0;destination={};async resume(){} createOscillator(){return {frequency:{value:0},connect(){},start(){sounds.push(this.frequency.value)},stop(){}}}createGain(){return {connect(){},gain:{setValueAtTime(){},linearRampToValueAtTime(){},exponentialRampToValueAtTime(){}}}}}},Intl,Date,JSON,Number,String,Object,Array,Map,Set,Error,Promise,AbortSignal,encodeURIComponent,
   Option:function(text,value){return {text,value}},setTimeout:()=>1,clearTimeout(){},setInterval:()=>1,clearInterval(){},fetch:async(path,options)=>{
-   calls.push({path,body:options.body&&JSON.parse(options.body)});
+   calls.push({path,method:options.method,body:options.body&&JSON.parse(options.body)});
    return {ok:true,json:async()=>path==='/admin/quotes'?{quoteId:'quote'+(++quoteNumber),expiresAt:Date.now()+600000,distanceMeters:5000,subtotalCents:836,trafficCents:0,gstCents:42,qstCents:83,totalCents:961}:path==='/deliveries'?{id:'delivery'}:[]};
   }});
  const html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8');vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],context);
  for(const [key,value]of Object.entries({pickup:'123 Montréal',destination:'456 Longueuil',pickupPostalCode:'H2X 1Y4',destinationPostalCode:'J4K 1A1',driverSelect:'driver'}))get(key).value=value;
- return {get,calls,sounds,evaluate:code=>vm.runInContext(code,context)};
+ return {get,calls,sounds,confirmations,cancelConfirmation(){confirmAllowed=false},evaluate:code=>vm.runInContext(code,context)};
 }
 test('Admin reviews quote and taxes, accepts price, assigns tip and clears quotes when addresses change',async()=>{
  const s=setup();assert.equal(s.get('assignButton').disabled,true);
@@ -43,4 +43,12 @@ test('Admin has two distinct opt-in sounds, visual notices, and deduplicates quo
  s.evaluate("notifyActivity()");await new Promise(setImmediate);assert.equal(s.sounds.length,2);
  s.evaluate("latestRequests=[{id:'paid1',payment_state:'paid'}];notifyActivity()");await new Promise(setImmediate);assert.deepEqual(s.sounds.slice(2),[660,880,1100]);assert.match(s.get('activityAlert').textContent,/Pago confirmado/);
  await s.get('activitySound').onclick();s.sounds.length=0;s.evaluate("latestRequests.push({id:'paid2',payment_state:'paid'});notifyActivity()");await new Promise(setImmediate);assert.equal(s.sounds.length,0);
+});
+
+
+test('Delete is an explicit manual action, asks for confirmation, and warns that paid requests are not refunded',async()=>{
+ const s=setup();s.evaluate("language='es';token='admin'");
+ const button=s.evaluate("deleteButton('/requests/'+ 'a'.repeat(48),true)");assert.equal(button.textContent,'Eliminar');assert.equal(s.calls.length,0);
+ await button.onclick();assert.match(s.confirmations[0],/no cancela ni reembolsa/);assert.ok(s.calls.some(c=>c.method==='DELETE'&&c.path==='/requests/'+'a'.repeat(48)));
+ const before=s.calls.length;s.cancelConfirmation();await button.onclick();assert.equal(s.calls.length,before);
 });
