@@ -33,13 +33,13 @@ export function createRequestMailer(store,{env=process.env,send,now=Date.now,log
   try{
    if(!sender){const {default:nodemailer}=await import('nodemailer');const transport=nodemailer.createTransport({host:config.host,port:config.port,secure:config.port===465,requireTLS:config.port===587,auth:{user:config.user,pass:config.password},connectionTimeout:10000,greetingTimeout:10000,socketTimeout:15000,disableFileAccess:true,disableUrlAccess:true});sender=message=>transport.sendMail(message)}
    const at=now();
-   store.db.prepare(`UPDATE request_emails SET skipped_at=? WHERE sent_at IS NULL AND skipped_at IS NULL AND request_id IN (SELECT id FROM delivery_requests WHERE status!='pending' OR COALESCE((SELECT paid_at FROM request_payments WHERE request_id=delivery_requests.id),created_at)<?)`).run(at,at-86400000);
+   store.db.prepare(`UPDATE request_emails SET skipped_at=? WHERE sent_at IS NULL AND skipped_at IS NULL AND request_id IN (SELECT id FROM delivery_requests WHERE admin_removed_at IS NOT NULL OR status!='pending' OR COALESCE((SELECT paid_at FROM request_payments WHERE request_id=delivery_requests.id),created_at)<?)`).run(at,at-86400000);
    const jobs=store.db.prepare(`SELECT e.*,r.payment_state,r.requester_name,r.pickup,r.destination,r.ready_at,r.item_description,r.tip_cents,q.total_cents,q.gst_cents,q.qst_cents
     FROM request_emails e JOIN delivery_requests r ON r.id=e.request_id JOIN delivery_quotes q ON q.id=r.quote_id
-    WHERE e.sent_at IS NULL AND e.skipped_at IS NULL AND e.attempts<5 AND e.next_attempt_at<=? ORDER BY r.created_at LIMIT 5`).all(at);
+    WHERE r.admin_removed_at IS NULL AND e.sent_at IS NULL AND e.skipped_at IS NULL AND e.attempts<5 AND e.next_attempt_at<=? ORDER BY r.created_at LIMIT 5`).all(at);
    for(const job of jobs){
     if(stopped)break;
-    if(store.db.prepare('SELECT status FROM delivery_requests WHERE id=?').get(job.request_id)?.status!=='pending')continue;
+    const current=store.db.prepare('SELECT status,admin_removed_at FROM delivery_requests WHERE id=?').get(job.request_id);if(current?.status!=='pending'||current.admin_removed_at!=null)continue;
     const attempts=job.attempts+1;
     store.db.prepare('UPDATE request_emails SET attempts=?,next_attempt_at=? WHERE request_id=?').run(attempts,now()+Math.min(3600000,60000*2**(attempts-1)),job.request_id);
     try{

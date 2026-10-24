@@ -149,6 +149,8 @@ export const server=http.createServer(async(req,res)=>{
     else if(req.method==='GET'&&path==='/deliveries')data=store.deliveries(u);
     else if(req.method==='GET'&&path==='/requests')data=store.requests(u);
     else if(req.method==='GET'&&path==='/admin/quote-activity')data=store.quoteActivity(u);
+    else if(req.method==='DELETE'&&/^\/requests\/[a-f0-9]{48}$/.test(path))data=store.removeRequest(u,path.split('/')[2]);
+    else if(req.method==='DELETE'&&/^\/admin\/quote-activity\/[a-f0-9]{48}$/.test(path))data=store.removeQuoteActivity(u,path.split('/')[3]);
     else if(req.method==='PATCH'&&/^\/requests\/[a-f0-9]{48}$/.test(path)){
       if(u.role!=='admin')throw new Problem(403,'Acceso denegado / Accès refusé');
       const requestId=path.split('/')[2];

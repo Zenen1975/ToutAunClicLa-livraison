@@ -11,21 +11,19 @@ test('Driver map includes pickup before delivery and advances after collection i
   for(const lang of ['es','fr']){
     s.evaluate("lang='"+lang+"';renderJobs()");
     const card=s.nodes.get('jobs').children[0];
-    const links=card.children.filter(n=>n.href);
-    assert.equal(links.length,3);
-    const full=new URL(links[0].href);
-    assert.equal(full.origin,'https://www.google.com');
-    assert.equal(full.searchParams.get('destination'),destination);
-    assert.equal(full.searchParams.get('waypoints'),pickup);
-    assert.equal(full.searchParams.has('origin'),false);
-    assert.equal(full.searchParams.get('travelmode'),'driving');
-    assert.equal(new URL(links[1].href).searchParams.get('destination'),pickup);
-    assert.equal(new URL(links[2].href).searchParams.get('destination'),destination);
-    assert.match(links[0].textContent,lang==='es'?/recogida y entrega/:/collecte et livraison/);
-    for(const link of links)assert.equal(link.target,'_blank');
+    const links=card.children.filter(n=>n.href?.startsWith('https://www.google.com/'));
+    assert.equal(links.length,1);
+    const route=new URL(links[0].href);
+    assert.equal(route.origin,'https://www.google.com');
+    assert.equal(route.searchParams.get('destination'),pickup);
+    assert.equal(route.searchParams.has('origin'),false);
+    assert.equal(route.searchParams.get('travelmode'),'driving');
+    assert.equal(route.searchParams.get('dir_action'),'navigate');
+    assert.match(links[0].textContent,lang==='es'?/Ir a recoger/:/Aller à la collecte/);
+    assert.equal(links[0].target,'_blank');
   }
   s.evaluate("jobs[0].status='picked_up';renderJobs()");
-  const deliveryLinks=s.nodes.get('jobs').children[0].children.filter(n=>n.href);
+  const deliveryLinks=s.nodes.get('jobs').children[0].children.filter(n=>n.href?.startsWith('https://www.google.com/'));
   assert.equal(deliveryLinks.length,1);
   const deliveryUrl=new URL(deliveryLinks[0].href);
   assert.equal(deliveryUrl.searchParams.get('destination'),destination);

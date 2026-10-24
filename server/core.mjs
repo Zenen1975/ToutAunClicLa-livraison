@@ -58,6 +58,8 @@ export function createStore(path = 'livraison.sqlite') {
   db.exec("UPDATE deliveries SET completed_at=created_at WHERE status='delivered' AND completed_at IS NULL");
   db.exec('CREATE INDEX IF NOT EXISTS deliveries_completed ON deliveries(status,completed_at); CREATE INDEX IF NOT EXISTS restaurant_request_owner ON delivery_requests(restaurant_user_id,created_at)');
   const quoteColumns=new Set(db.prepare('PRAGMA table_info(delivery_quotes)').all().map(c=>c.name));
+  if(!requestColumns.has('admin_removed_at'))db.exec('ALTER TABLE delivery_requests ADD COLUMN admin_removed_at INTEGER');
+  if(!quoteColumns.has('admin_removed_at'))db.exec('ALTER TABLE delivery_quotes ADD COLUMN admin_removed_at INTEGER');
   if(!quoteColumns.has('public_quote'))db.exec('ALTER TABLE delivery_quotes ADD COLUMN public_quote INTEGER NOT NULL DEFAULT 0');
   db.exec(`CREATE TABLE IF NOT EXISTS quote_emails(quote_id TEXT PRIMARY KEY REFERENCES delivery_quotes(id) ON DELETE CASCADE,
     attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL,sent_at INTEGER,skipped_at INTEGER,last_error TEXT);`);
@@ -213,9 +215,12 @@ export function createStore(path = 'livraison.sqlite') {
     },
     quoteActivity(u){
       admin(u);
+      const now=Date.now();
       return db.prepare(`SELECT q.id,q.pickup,q.destination,q.created_at,q.total_cents+q.gst_cents+q.qst_cents AS total_cents,
-        COALESCE(r.payment_state,'quoted') AS payment_state FROM delivery_quotes q LEFT JOIN delivery_requests r ON r.quote_id=q.id
-        WHERE q.public_quote=1 AND q.created_at>? ORDER BY q.created_at DESC LIMIT 50`).all(Date.now()-86400000);
+        COALESCE(r.payment_state,'quoted') AS payment_state,
+        CASE WHEN (r.id IS NULL OR (r.status IN ('pending','declined') AND r.delivery_id IS NULL)) AND (r.status='declined' OR COALESCE(r.created_at,q.created_at)<?) THEN 1 ELSE 0 END AS canDelete
+        FROM delivery_quotes q LEFT JOIN delivery_requests r ON r.quote_id=q.id
+        WHERE q.public_quote=1 AND q.admin_removed_at IS NULL AND q.created_at>? ORDER BY q.created_at DESC LIMIT 50`).all(now-3600000,now-86400000);
     },
     saveQuote(p,{publicQuote=false}={}) {
       p={...p,...routeInput(p)};
@@ -289,7 +294,8 @@ export function createStore(path = 'livraison.sqlite') {
       db.exec('BEGIN IMMEDIATE');
       try{
         run("UPDATE request_payments SET status='paid',session_id=?,paid_at=? WHERE id=? AND status!='paid'",session.id,Date.now(),payment.id);
-        run("UPDATE delivery_requests SET payment_state='paid' WHERE id=? AND payment_state='awaiting_payment'",payment.request_id);
+        run("UPDATE delivery_requests SET payment_state='paid',admin_removed_at=NULL WHERE id=? AND payment_state='awaiting_payment'",payment.request_id);
+        run('UPDATE delivery_quotes SET admin_removed_at=NULL WHERE id=(SELECT quote_id FROM delivery_requests WHERE id=?)',payment.request_id);
         run('INSERT OR IGNORE INTO request_emails(request_id,next_attempt_at) VALUES(?,?)',payment.request_id,Date.now());
         db.exec('COMMIT');
       }catch(e){db.exec('ROLLBACK');throw e;}
@@ -299,13 +305,44 @@ export function createStore(path = 'livraison.sqlite') {
       admin(u);store.pruneHistory();
       return db.prepare(`SELECT r.*,d.status AS delivery_status,d.commission_cents,d.driver_payout_cents,q.total_cents,q.gst_cents,q.qst_cents,q.distance_meters,q.distance_cents,q.traffic_cents,q.duration_seconds,q.baseline_seconds
         FROM delivery_requests r LEFT JOIN deliveries d ON d.id=r.delivery_id LEFT JOIN delivery_quotes q ON q.id=r.quote_id
-        WHERE r.payment_state IN ('legacy','paid') AND (d.id IS NULL OR d.status!='delivered' OR d.completed_at>?)
-        ORDER BY CASE WHEN r.status='pending' THEN 0 ELSE 1 END,r.created_at DESC`).all(Date.now()-5*86400000).map(({submission_id,status_token_hash,...r})=>({...r,reference:'TAC-'+r.id.slice(0,12).toUpperCase()}));
+        WHERE r.admin_removed_at IS NULL AND r.payment_state IN ('legacy','paid') AND (d.id IS NULL OR d.status!='delivered' OR d.completed_at>?)
+        ORDER BY CASE WHEN r.status='pending' THEN 0 ELSE 1 END,r.created_at DESC`).all(Date.now()-5*86400000).map(({submission_id,status_token_hash,...r})=>({...r,canDelete:!r.delivery_id&&(r.status==='declined'||r.status==='pending'&&r.created_at<Date.now()-3600000),reference:'TAC-'+r.id.slice(0,12).toUpperCase()}));
+    },
+    removeRequest(u,rid){
+      admin(u);
+      const r=one('SELECT * FROM delivery_requests WHERE id=?',rid);
+      fail(!r,404,'Solicitud no encontrada / Demande introuvable');
+      fail(r.delivery_id||!(r.status==='declined'||r.status==='pending'&&r.created_at<Date.now()-3600000),409,'Solo puedes eliminar solicitudes rechazadas o en espera más de una hora, sin repartidor asignado / Seules les demandes refusées ou en attente depuis plus d’une heure, sans livreur assigné, peuvent être supprimées');
+      const now=Date.now();db.exec('BEGIN IMMEDIATE');
+      try{
+        run('UPDATE delivery_requests SET admin_removed_at=COALESCE(admin_removed_at,?) WHERE id=?',now,rid);
+        run('UPDATE delivery_quotes SET admin_removed_at=COALESCE(admin_removed_at,?) WHERE id=?',now,r.quote_id);
+        run('UPDATE request_emails SET skipped_at=COALESCE(skipped_at,?) WHERE request_id=? AND sent_at IS NULL',now,rid);
+        run('UPDATE quote_emails SET skipped_at=COALESCE(skipped_at,?) WHERE quote_id=? AND sent_at IS NULL',now,r.quote_id);
+        db.exec('COMMIT');
+      }catch(error){db.exec('ROLLBACK');throw error;}
+      return {ok:true};
+    },
+    removeQuoteActivity(u,qid){
+      admin(u);
+      const q=one('SELECT * FROM delivery_quotes WHERE id=? AND public_quote=1',qid);
+      fail(!q,404,'Cotización no encontrada / Devis introuvable');
+      const r=one('SELECT id FROM delivery_requests WHERE quote_id=?',qid);
+      if(r)return store.removeRequest(u,r.id);
+      fail(q.created_at>=Date.now()-3600000||!!one('SELECT id FROM deliveries WHERE admin_quote_id=?',qid),409,'La cotización debe llevar más de una hora sin completar / Le devis doit être incomplet depuis plus d’une heure');
+      const now=Date.now();db.exec('BEGIN IMMEDIATE');
+      try{
+        run('UPDATE delivery_quotes SET admin_removed_at=COALESCE(admin_removed_at,?) WHERE id=?',now,qid);
+        run('UPDATE quote_emails SET skipped_at=COALESCE(skipped_at,?) WHERE quote_id=? AND sent_at IS NULL',now,qid);
+        db.exec('COMMIT');
+      }catch(error){db.exec('ROLLBACK');throw error;}
+      return {ok:true};
     },
     declineRequest(u,rid) {
       admin(u);
       const r=one('SELECT * FROM delivery_requests WHERE id=?',rid);
       fail(!r,404,'Solicitud no encontrada / Demande introuvable');
+      fail(r.admin_removed_at!=null,409,'Solicitud eliminada del panel / Demande supprimée du panneau');
       fail(r.payment_state==='awaiting_payment',409,'Pago pendiente / Paiement en attente');
       fail(r.status!=='pending',409,'Solicitud ya procesada / Demande déjà traitée');
       run("UPDATE delivery_requests SET status='declined',reviewed_at=? WHERE id=? AND status='pending'",Date.now(),rid);
@@ -333,6 +370,7 @@ export function createStore(path = 'livraison.sqlite') {
       const request=p.requestId?one('SELECT * FROM delivery_requests WHERE id=?',p.requestId):null;
       if(p.requestId){
         fail(!request,404,'Solicitud no encontrada / Demande introuvable');
+        fail(request.admin_removed_at!=null,409,'Solicitud eliminada del panel / Demande supprimée du panneau');
         fail(request.payment_state==='awaiting_payment',409,'Pago pendiente / Paiement en attente');
         fail(request.status!=='pending',409,'Solicitud ya procesada / Demande déjà traitée');
         p={...p,pickup:request.pickup,destination:request.destination};
