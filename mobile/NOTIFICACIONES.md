@@ -31,3 +31,9 @@ Con un turno activo, volver a la app comprueba los permisos y envía una ubicaci
 Durante el turno aparece «Mantener la pantalla encendida durante mi turno». Es opcional, empieza desactivado y solo mantiene despierta la pantalla mientras esta app está visible. No solicita un permiso adicional ni impide apagar la pantalla con el botón lateral. Terminar el turno desactiva la opción. Requiere generar e instalar una nueva APK.
 
 Pruebas en el teléfono: iniciar turno, bloquear y volver a abrir; quitar y restablecer cobertura; desactivar y restaurar GPS; terminar turno y reabrir comprobando que no se reactiva; activar el interruptor y esperar el tiempo normal de bloqueo, apagar manualmente y terminar turno. El panel debe mostrar una posición reciente tras recuperarse la señal.
+
+## Corrección Android 0.2.2
+
+Se aplica automáticamente al ejecutar `npm ci` una corrección de duración del contexto de `expo-task-manager` 55.0.20, basada en expo/expo#49498. Evita que TaskService pierda el contexto al recolectarse un ReactContext y rechace iniciar o detener ubicación con `SharedPreferences.getAll()` sobre null. No basta con una actualización JavaScript: requiere otra APK. El script es idempotente y rechaza versiones o código inesperados para exigir revisión al actualizar Expo. No cambia permisos, Firebase ni servidor.
+
+Validación local: `npm test`. En Samsung, volver a abrir la app después de bloquearla varios minutos, terminar/iniciar turno varias veces, y comprobar tanto posiciones nuevas en el panel como recuperación tras pérdida de cobertura. No borrar datos ni desinstalar como solución al fallo.
