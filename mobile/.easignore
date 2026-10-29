@@ -1,0 +1,10 @@
+node_modules/
+.expo/
+android/
+ios/
+dist/
+.env
+.env.*
+*.sqlite*
+*firebase-adminsdk*.json
+!google-services.json
