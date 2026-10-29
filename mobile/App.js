@@ -1,10 +1,13 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {ActivityIndicator,Alert,AppState,Linking,Pressable,SafeAreaView,ScrollView,StatusBar,StyleSheet,Text,TextInput,View} from 'react-native';
+import {ActivityIndicator,Alert,AppState,Linking,Pressable,SafeAreaView,ScrollView,StatusBar,StyleSheet,Switch,Text,TextInput,View} from 'react-native';
 import {registerNotifications,testNotification,onDeliveryNotification} from './src/notifications';
+import {useKeepAwake} from 'expo-keep-awake';
 import * as SecureStore from 'expo-secure-store';
 import {request,SESSION} from './src/api';
-import {saveToken,startSharing,stopSharing,trackingState} from './src/tracking';
+import {saveToken,startSharing,stopSharing,resumeSharing,trackingState} from './src/tracking';
 
+function AwakeDuringShift(){useKeepAwake('tacl-active-shift',{suppressDeactivateWarnings:true});return null;}
+const screenWords={fr:{label:'Garder l’écran allumé pendant mon service',help:'Vous pouvez toujours l’éteindre avec le bouton latéral.'},es:{label:'Mantener la pantalla encendida durante mi turno',help:'Puedes apagarla con el botón lateral.'}};
 const notificationWords={
  fr:{title:'Alertes de livraison',enable:'Activer les notifications',test:'Tester le son (dans 5 secondes)',ready:'Notifications activées sur ce téléphone.',blocked:'Notifications désactivées. Autorisez-les dans les réglages.',pending:'Vérification des notifications…',failed:'Impossible de connecter les alertes. Réessayez avec une connexion.',testing:'Test programmé dans 5 secondes. Vous pouvez verrouiller l’écran.'},
  es:{title:'Alertas de entregas',enable:'Activar notificaciones',test:'Probar sonido (en 5 segundos)',ready:'Notificaciones activadas en este teléfono.',blocked:'Notificaciones desactivadas. Autorízalas en los ajustes.',pending:'Verificando las notificaciones…',failed:'No se pudieron conectar las alertas. Reintenta con conexión.',testing:'Prueba programada en 5 segundos. Puedes bloquear la pantalla.'}
@@ -16,17 +19,20 @@ const words={
 function Button({title,onPress,disabled,secondary=false}){return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[s.button,secondary&&s.secondary,disabled&&{opacity:.5}]}><Text style={[s.buttonText,secondary&&{color:'#613098'}]}>{title}</Text></Pressable>}
 export default function App(){
  const[lang,setLang]=useState('fr'),[user,setUser]=useState(null),[email,setEmail]=useState(''),[password,setPassword]=useState(''),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[orders,setOrders]=useState([]),[gps,setGps]=useState({sharing:false}),[now,setNow]=useState(Date.now());
+ const [keepScreenAwake,setKeepScreenAwake]=useState(false),[appState,setAppState]=useState(AppState.currentState);
+ useEffect(()=>{const sub=AppState.addEventListener('change',setAppState);return()=>sub.remove()},[]);
+ useEffect(()=>{if(!user||!gps.sharing)setKeepScreenAwake(false)},[user,gps.sharing]);
  const [pushStatus,setPushStatus]=useState('pending');const pushBusy=useRef(false);
  const n=notificationWords[lang];
  const t=k=>words[lang][k]||k;const epoch=useRef(0),refreshing=useRef(false),mounted=useRef(true);
- async function refresh(){
+ async function refresh(forcePosition=false){
    if(refreshing.current)return;refreshing.current=true;const current=epoch.current;
-   try{const state=await trackingState();const list=await request('/deliveries');if(mounted.current&&current===epoch.current){setGps(state);setOrders(list);setNow(Date.now());setError('')}}
+   try{if(AppState.currentState==='active')await resumeSharing({force:forcePosition===true});const state=await trackingState();if(mounted.current&&current===epoch.current){setGps(state);setNow(Date.now())}const list=await request('/deliveries');if(mounted.current&&current===epoch.current){setOrders(list);setNow(Date.now());setError('')}}
    catch(e){if(mounted.current&&current===epoch.current){setError(e.message);if(e.status===401){await stopSharing().catch(()=>{});await SecureStore.deleteItemAsync(SESSION);setUser(null);setOrders([]);setGps({sharing:false});epoch.current++}}}
    finally{refreshing.current=false}
  }
  useEffect(()=>{mounted.current=true;(async()=>{try{if(await SecureStore.getItemAsync(SESSION)){const u=await request('/me');if(u.role==='driver')setUser(u)}}catch(e){setError(e.message)}finally{setLoading(false)}})();return()=>{mounted.current=false;epoch.current++}},[]);
- useEffect(()=>{if(!user)return;refresh();const timer=setInterval(refresh,12000);const sub=AppState.addEventListener('change',state=>{if(state==='active')refresh()});return()=>{clearInterval(timer);sub.remove()}},[user]);
+ useEffect(()=>{if(!user)return;refresh(true);const timer=setInterval(()=>{if(AppState.currentState==='active')void refresh()},12000);const sub=AppState.addEventListener('change',state=>{if(state==='active')refresh(true)});return()=>{clearInterval(timer);sub.remove()}},[user]);
  async function enableNotifications(ask=true){
    if(pushBusy.current)return false;pushBusy.current=true;const current=epoch.current;
    try{const ok=await registerNotifications(lang,ask);if(mounted.current&&current===epoch.current)setPushStatus(ok?'ready':'blocked');return ok;}
@@ -50,14 +56,15 @@ export default function App(){
  }
 
  function transition(order){const status=order.status==='assigned'?'picked_up':'delivered';Alert.alert(t('confirm'),t('confirmText'),[{text:t('cancel'),style:'cancel'},{text:t('yes'),onPress:()=>action(async()=>{await request('/deliveries/'+order.id,'PATCH',{status});await refresh()})}])}
- const fresh=gps.last&&now-gps.last.measuredAt<90000&&now-gps.last.sentAt<90000;
+ const fresh=gps.running!==false&&gps.last&&now-gps.last.measuredAt<90000&&now-gps.last.sentAt<90000;
  const status=!gps.sharing?t('offline'):gps.error?t('stale'):fresh?t('online'):gps.last?t('stale'):t('waiting');
  const active=orders.filter(o=>o.status!=='delivered'),done=orders.filter(o=>o.status==='delivered').length;
  return <SafeAreaView style={s.safe}><StatusBar barStyle="dark-content" backgroundColor="#faf8fd"/><ScrollView contentContainerStyle={s.page} keyboardShouldPersistTaps="handled">
+ {user&&gps.sharing&&keepScreenAwake&&appState==='active'&&<AwakeDuringShift/>}
  <View style={s.header}><View><Text style={s.brand}>{t('brand')}</Text><Text style={s.overline}>{t('subtitle')}</Text></View><Pressable accessibilityRole="button" onPress={()=>setLang(lang==='fr'?'es':'fr')} style={s.lang}><Text style={s.langText}>{lang==='fr'?'ES':'FR'}</Text></Pressable></View>
  {loading?<ActivityIndicator size="large" color="#613098"/>:!user?<View style={s.card}><Text style={s.hero}>{t('hello')}</Text><Text style={s.muted}>{t('intro')}</Text><Text style={s.label}>{t('email')}</Text><TextInput accessibilityLabel={t('email')} style={s.input} value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" autoComplete="email"/><Text style={s.label}>{t('password')}</Text><TextInput accessibilityLabel={t('password')} style={s.input} value={password} onChangeText={setPassword} secureTextEntry autoComplete="current-password"/><Button title={t('login')} disabled={busy||!email||!password} onPress={()=>action(login)}/></View>:<>
  <Text style={s.eyebrow}>{t('driver')}</Text><Text style={s.hero}>{user.name}</Text>
- <View style={s.card}><View style={s.statusRow}><View style={[s.dot,{backgroundColor:gps.sharing&&fresh&&!gps.error?'#319363':gps.sharing?'#cf8a32':'#9a90a8'}]}/><Text accessibilityLiveRegion="polite" style={s.status}>{status}</Text></View><Text style={s.muted}>{t('note')}</Text><Button disabled={busy} title={gps.sharing?t('stop'):t('start')} onPress={gps.sharing?()=>action(disconnect):connect} secondary={gps.sharing}/>{gps.last&&<Text style={s.gps}>{t('received')}: {new Date(gps.last.sentAt).toLocaleTimeString()} · {t('accuracy')}: {Math.round(gps.last.accuracy || 0)} m</Text>}<Pressable accessibilityRole="button" onPress={()=>Linking.openSettings()}><Text style={s.link}>{t('settings')}</Text></Pressable></View>
+ <View style={s.card}><View style={s.statusRow}><View style={[s.dot,{backgroundColor:gps.sharing&&fresh&&!gps.error?'#319363':gps.sharing?'#cf8a32':'#9a90a8'}]}/><Text accessibilityLiveRegion="polite" style={s.status}>{status}</Text></View><Text style={s.muted}>{t('note')}</Text>{gps.sharing&&<View style={{marginTop:16}}><View style={s.statusRow}><Text style={[s.muted,{flex:1}]}>{screenWords[lang].label}</Text><Switch accessibilityLabel={screenWords[lang].label} value={keepScreenAwake} onValueChange={setKeepScreenAwake} trackColor={{true:'#613098'}}/></View><Text style={s.gps}>{screenWords[lang].help}</Text></View>}{!!gps.error&&<Text accessibilityRole="alert" style={s.error}>{gps.error}</Text>}<Button disabled={busy} title={gps.sharing?t('stop'):t('start')} onPress={gps.sharing?()=>action(disconnect):connect} secondary={gps.sharing}/>{gps.last&&<Text style={s.gps}>{t('received')}: {new Date(gps.last.sentAt).toLocaleTimeString()} · {t('accuracy')}: {Math.round(gps.last.accuracy || 0)} m</Text>}<Pressable accessibilityRole="button" onPress={()=>Linking.openSettings()}><Text style={s.link}>{t('settings')}</Text></Pressable></View>
  <View style={s.card}><Text style={s.status}>{n.title}</Text><Text accessibilityLiveRegion="polite" style={s.muted}>{n[pushStatus]}</Text>
  <Button secondary disabled={busy} title={n.enable} onPress={()=>action(async()=>{if(!await enableNotifications())Alert.alert(n.title,n.blocked,[{text:'OK'},{text:t('settings'),onPress:()=>Linking.openSettings()}])})}/>
  <Button disabled={busy||pushStatus!=='ready'} title={n.test} onPress={()=>action(async()=>{await testNotification(lang);Alert.alert(n.title,n.testing)})}/></View>

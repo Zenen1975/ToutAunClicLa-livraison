@@ -23,3 +23,11 @@ El botón prueba el sonido local; la asignación real prueba además Firebase, E
 La sesión dura siete días. Cerrar sesión revoca las alertas de esa sesión. Al cambiar de cuenta en el mismo teléfono se retira el registro anterior. No se muestran direcciones en el texto de la alerta.
 
 El icono de la app utiliza el globo y el nombre multicolor del logo de ToutAunClicLa, sobre fondo blanco.
+
+## Recuperación de ubicación y pantalla
+
+Con un turno activo, volver a la app comprueba los permisos y envía una ubicación nueva. Si el seguimiento se detuvo o lleva un minuto sin actualizarse, intenta reiniciarlo. Los errores temporales de red o GPS conservan el turno y se reintentan mientras la app está activa o Android entrega posiciones en segundo plano. Terminar el turno impide la reconexión; una sesión o turno rechazados por el servidor también detienen el seguimiento. Android puede suspender la app: en ese caso la recuperación requiere abrirla.
+
+Durante el turno aparece «Mantener la pantalla encendida durante mi turno». Es opcional, empieza desactivado y solo mantiene despierta la pantalla mientras esta app está visible. No solicita un permiso adicional ni impide apagar la pantalla con el botón lateral. Terminar el turno desactiva la opción. Requiere generar e instalar una nueva APK.
+
+Pruebas en el teléfono: iniciar turno, bloquear y volver a abrir; quitar y restablecer cobertura; desactivar y restaurar GPS; terminar turno y reabrir comprobando que no se reactiva; activar el interruptor y esperar el tiempo normal de bloqueo, apagar manualmente y terminar turno. El panel debe mostrar una posición reciente tras recuperarse la señal.
