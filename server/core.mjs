@@ -68,6 +68,12 @@ export function createStore(path = 'livraison.sqlite') {
     if(!requestColumns.has(name))db.exec('ALTER TABLE delivery_requests ADD COLUMN '+name+" TEXT NOT NULL DEFAULT ''");
     if(!quoteColumns.has(name))db.exec('ALTER TABLE delivery_quotes ADD COLUMN '+name+" TEXT NOT NULL DEFAULT ''");
   }
+  db.exec(`CREATE TABLE IF NOT EXISTS native_push_tokens(token TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),
+    session_token TEXT NOT NULL REFERENCES sessions(token) ON DELETE CASCADE,language TEXT NOT NULL,updated_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS native_push_jobs(id INTEGER PRIMARY KEY,delivery_id TEXT NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
+    token TEXT NOT NULL REFERENCES native_push_tokens(token) ON DELETE CASCADE,created_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL,ticket TEXT,processed_at INTEGER,last_error TEXT,
+    UNIQUE(delivery_id,token));`);
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
   const userView = u => ({id:u.id, name:u.name, email:u.email, role:u.account_type==='restaurant'?'restaurant':u.role});
@@ -75,6 +81,23 @@ export function createStore(path = 'livraison.sqlite') {
   const driver = u => fail(u.role !== 'driver', 403, 'Acceso reservado al repartidor / Accès livreur');
   const store = {
     db,
+    registerNativePush(u,p,sessionToken) {
+      driver(u);
+      fail(typeof p.token!=='string'||! /^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]{10,200}\]$/.test(p.token),400,'Token de notificación inválido / Jeton invalide');
+      fail(!['fr','es'].includes(p.language),400,'Idioma inválido / Langue invalide');
+      const session=one('SELECT token FROM sessions WHERE token=? AND user_id=? AND expires>?',hash(sessionToken),u.id,Date.now());
+      fail(!session,401,'Sesión vencida / Session expirée');
+      // Moving a shared phone to another login removes queued messages for its previous account.
+      const previous=one('SELECT session_token FROM native_push_tokens WHERE token=?',p.token);
+      if(previous&&previous.session_token!==session.token)run('DELETE FROM native_push_tokens WHERE token=?',p.token);
+      run(`INSERT INTO native_push_tokens VALUES(?,?,?,?,?) ON CONFLICT(token) DO UPDATE SET
+        language=excluded.language,updated_at=excluded.updated_at`,p.token,u.id,session.token,p.language,Date.now());
+      return {ok:true};
+    },
+    unregisterNativePush(u,p,sessionToken) {
+      driver(u);fail(typeof p.token!=='string'||p.token.length>250,400,'Token inválido');
+      run('DELETE FROM native_push_tokens WHERE token=? AND user_id=? AND session_token=?',p.token,u.id,hash(sessionToken));return {ok:true};
+    },
     createUser({email, name, password, role='driver',pickup='',pickupPostalCode=''}) {
       fail(typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254, 400, 'Email incorrecto / Courriel invalide');
       fail(typeof name !== 'string' || !name.trim() || name.length > 100, 400, 'Nombre incorrecto / Nom invalide');
@@ -389,6 +412,9 @@ export function createStore(path = 'livraison.sqlite') {
         run('INSERT INTO deliveries(id,pickup,destination,driver_id,created_at,batch_id,total_price_cents,commission_cents,driver_payout_cents,delivery_fare_cents,tip_cents,gst_cents,qst_cents) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',did,p.pickup.trim(),p.destination.trim(),p.driverId,now,joining?d.batch.id:did,split?.totalPriceCents??null,split?.commissionCents??null,split?.driverPayoutCents??null,split?.deliveryFareCents??null,split?.tipCents??null,split?.gstCents??null,split?.qstCents??null);
         if(manualQuote)run('UPDATE deliveries SET admin_quote_id=? WHERE id=?',manualQuote.id,did);
         run('INSERT INTO assignment_emails(delivery_id,next_attempt_at) VALUES(?,?)',did,now);
+        run(`INSERT INTO native_push_jobs(delivery_id,token,created_at,next_attempt_at)
+          SELECT ?,t.token,?,? FROM native_push_tokens t JOIN sessions s ON s.token=t.session_token
+          WHERE t.user_id=? AND s.expires>?`,did,now,now,p.driverId,now);
         if(request){
           const changed=run("UPDATE delivery_requests SET status='assigned',delivery_id=?,reviewed_at=? WHERE id=? AND status='pending'",did,now,request.id);
           fail(changed.changes!==1,409,'Solicitud ya procesada / Demande déjà traitée');
