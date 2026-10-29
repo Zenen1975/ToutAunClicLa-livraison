@@ -2,6 +2,7 @@ export default {
   expo: {
     name:'ToutAunClicLa Livraison',slug:'toutaunclicla-livraison',owner:'zenen',version:'0.2.0',orientation:'portrait',
     extra:{eas:{projectId:'1cafb686-44a9-458c-bdc1-12889e867664'}},
+    icon:'./assets/app-icon.png',
     scheme:'toutaunclicla-livraison',userInterfaceStyle:'light',
     ios:{bundleIdentifier:'com.toutaunclicla.livraison',supportsTablet:true},
     android:{package:'com.toutaunclicla.livraison',googleServicesFile:'./google-services.json',permissions:['android.permission.RECEIVE_BOOT_COMPLETED','android.permission.POST_NOTIFICATIONS']},

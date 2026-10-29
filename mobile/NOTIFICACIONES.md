@@ -22,4 +22,4 @@ El botón prueba el sonido local; la asignación real prueba además Firebase, E
 
 La sesión dura siete días. Cerrar sesión revoca las alertas de esa sesión. Al cambiar de cuenta en el mismo teléfono se retira el registro anterior. No se muestran direcciones en el texto de la alerta.
 
-El icono con el logo sigue pendiente del archivo gráfico.
+El icono de la app utiliza el globo y el nombre multicolor del logo de ToutAunClicLa, sobre fondo blanco.
