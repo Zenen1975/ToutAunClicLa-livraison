@@ -9,8 +9,10 @@ import {createRequestMailer} from './request-mail.mjs';
 import {createPasswordMailer} from './password-mail.mjs';
 import {createQuoteMailer} from './quote-mail.mjs';
 import {checkout,paymentConfig,verifyStripeEvent} from './payments.mjs';
+import {createNativePush} from './native-push.mjs';
 const store=createStore(process.env.DATABASE_PATH || 'livraison.sqlite');
 const mailer=createAssignmentMailer(store);
+const nativePush=createNativePush(store);
 const requestMailer=createRequestMailer(store);
 const quoteMailer=createQuoteMailer(store);
 const passwordMailer=createPasswordMailer();
@@ -114,6 +116,8 @@ export const server=http.createServer(async(req,res)=>{
     const u=store.authenticate(token);
     let data;
     if(req.method==='GET'&&path==='/me')data=u;
+    else if(req.method==='POST'&&path==='/driver/native-push/register')data=store.registerNativePush(u,p,token);
+    else if(req.method==='POST'&&path==='/driver/native-push/unregister')data=store.unregisterNativePush(u,p,token);
     else if(req.method==='POST'&&path==='/logout')data=store.logout(u,token);
     else if(req.method==='POST'&&path==='/shift/start')data=store.start(u,p.consent);
     else if(req.method==='POST'&&path==='/shift/stop')data=store.stop(u);
@@ -154,7 +158,7 @@ export const server=http.createServer(async(req,res)=>{
     else if(req.method==='PATCH'&&/^\/requests\/[a-f0-9]{48}$/.test(path)){
       if(u.role!=='admin')throw new Problem(403,'Acceso denegado / Accès refusé');
       const requestId=path.split('/')[2];
-      if(p.action==='assign'){data=store.createDelivery(u,{requestId,driverId:p.driverId,joinBatch:p.joinBatch===true});void mailer.flush();}
+      if(p.action==='assign'){data=store.createDelivery(u,{requestId,driverId:p.driverId,joinBatch:p.joinBatch===true});void mailer.flush();void nativePush.flush();}
       else if(p.action==='decline')data=store.declineRequest(u,requestId);
       else throw new Problem(400,'Acción incorrecta / Action invalide');
     }
@@ -164,7 +168,7 @@ export const server=http.createServer(async(req,res)=>{
     }
     else if(req.method==='POST'&&path==='/deliveries'){
       data=p.requestId?store.createDelivery(u,p):store.assignQuotedDelivery(u,p);
-      void mailer.flush();
+      void mailer.flush();void nativePush.flush();
     }
     else if(req.method==='PATCH'&&/^\/deliveries\/[a-f0-9]{48}$/.test(path))data=store.updateDelivery(u,path.split('/')[2],p.status);
     else if(req.method==='POST'&&/^\/batches\/[a-f0-9]{48}\/pickup$/.test(path))data=store.collectBatch(u,path.split('/')[2]);
@@ -172,7 +176,7 @@ export const server=http.createServer(async(req,res)=>{
     send(200,data);
   }catch(e){send(e.status || 500,{error:e.status?e.message:'Error del servidor / Erreur serveur'});if(!e.status)console.error(e);}
 });
-server.on('listening',()=>{store.pruneHistory();mailer.start();requestMailer.start();quoteMailer.start();retentionTimer=setInterval(()=>{try{store.pruneHistory()}catch{console.error('No se pudo limpiar el historial de entregas.')}},60000);retentionTimer.unref()});
-server.on('close',()=>{clearInterval(retentionTimer);mailer.stop();requestMailer.stop();quoteMailer.stop()});
+server.on('listening',()=>{store.pruneHistory();mailer.start();nativePush.start();requestMailer.start();quoteMailer.start();retentionTimer=setInterval(()=>{try{store.pruneHistory()}catch{console.error('No se pudo limpiar el historial de entregas.')}},60000);retentionTimer.unref()});
+server.on('close',()=>{clearInterval(retentionTimer);mailer.stop();nativePush.stop();requestMailer.stop();quoteMailer.stop()});
 if(process.argv[1]===fileURLToPath(import.meta.url))server.listen(Number(process.env.PORT || 8787),process.env.HOST || '127.0.0.1',()=>console.log('Panel: http://127.0.0.1:'+ (process.env.PORT || 8787)));
 

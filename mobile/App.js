@@ -1,9 +1,14 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {ActivityIndicator,Alert,AppState,Linking,Pressable,SafeAreaView,ScrollView,StatusBar,StyleSheet,Text,TextInput,View} from 'react-native';
+import {registerNotifications,testNotification,onDeliveryNotification} from './src/notifications';
 import * as SecureStore from 'expo-secure-store';
 import {request,SESSION} from './src/api';
 import {saveToken,startSharing,stopSharing,trackingState} from './src/tracking';
 
+const notificationWords={
+ fr:{title:'Alertes de livraison',enable:'Activer les notifications',test:'Tester le son (dans 5 secondes)',ready:'Notifications activées sur ce téléphone.',blocked:'Notifications désactivées. Autorisez-les dans les réglages.',pending:'Vérification des notifications…',failed:'Impossible de connecter les alertes. Réessayez avec une connexion.',testing:'Test programmé dans 5 secondes. Vous pouvez verrouiller l’écran.'},
+ es:{title:'Alertas de entregas',enable:'Activar notificaciones',test:'Probar sonido (en 5 segundos)',ready:'Notificaciones activadas en este teléfono.',blocked:'Notificaciones desactivadas. Autorízalas en los ajustes.',pending:'Verificando las notificaciones…',failed:'No se pudieron conectar las alertas. Reintenta con conexión.',testing:'Prueba programada en 5 segundos. Puedes bloquear la pantalla.'}
+};
 const words={
  fr:{brand:'ToutAunClicLa',subtitle:'LIVRAISONS · MONTRÉAL ET RIVE-SUD',hello:'Votre service, en un clic.',intro:'Connectez-vous pour recevoir vos livraisons.',email:'Courriel',password:'Mot de passe',login:'Se connecter',logout:'Se déconnecter',driver:'Espace livreur',offline:'Hors service',online:'Service activé',waiting:'En attente du GPS',stale:'Position non actualisée',start:'Commencer mon service',stop:'Terminer mon service',consentTitle:'Partager votre position ?',consent:'Pendant votre service, votre position précise sera partagée avec les administrateurs de ToutAunClicLa, même en arrière-plan ou avec l’écran verrouillé. Le partage s’arrête lorsque vous terminez votre service. La fréquence dépend du téléphone et du réseau. Android peut ouvrir les réglages : autorisez la localisation en permanence.',cancel:'Annuler',allow:'Autoriser et me connecter',orders:'Mes livraisons',empty:'Aucune livraison assignée.',emptyDetail:'Les nouvelles livraisons apparaîtront ici pendant votre service.',pickup:'Collecte',destination:'Livraison',route:'Ouvrir Google Maps',picked:'Confirmer la collecte',delivered:'Confirmer la livraison',confirm:'Confirmer cette étape ?',confirmText:'Vérifiez que la collecte ou la livraison a bien été effectuée.',yes:'Confirmer',assigned:'Vers la collecte',picked_up:'En livraison',completed:'Terminée',gps:'Dernière position transmise',accuracy:'Précision',settings:'Ouvrir les réglages',error:'À vérifier',retry:'Actualiser',only:'Utilisez un compte livreur.',stopped:'Le partage local est arrêté. La confirmation au serveur a échoué : le panel marquera la position comme non actualisée. Réessayez avec une connexion.',note:'Votre position est partagée uniquement pendant votre service.',refreshError:'Impossible de mettre à jour les livraisons.',received:'Dernier envoi réussi'},
  es:{brand:'ToutAunClicLa',subtitle:'LIVRAISON · MONTRÉAL Y RIVE-SUD',hello:'Tu turno, a un clic.',intro:'Inicia sesión para recibir tus entregas.',email:'Correo',password:'Contraseña',login:'Iniciar sesión',logout:'Cerrar sesión',driver:'Espacio repartidor',offline:'Fuera de servicio',online:'Turno activado',waiting:'Esperando GPS',stale:'Ubicación desactualizada',start:'Comenzar mi turno',stop:'Terminar mi turno',consentTitle:'¿Compartir tu ubicación?',consent:'Durante tu turno, tu ubicación precisa se compartirá con los administradores de ToutAunClicLa, también en segundo plano o con la pantalla bloqueada. Se detiene al terminar tu turno. La frecuencia depende del teléfono y de la red. Android puede abrir Ajustes: autoriza la ubicación todo el tiempo.',cancel:'Cancelar',allow:'Autorizar y conectarme',orders:'Mis entregas',empty:'Sin entregas asignadas.',emptyDetail:'Las nuevas entregas aparecerán aquí durante tu turno.',pickup:'Recogida',destination:'Entrega',route:'Abrir Google Maps',picked:'Confirmar recogida',delivered:'Confirmar entrega',confirm:'¿Confirmar esta etapa?',confirmText:'Verifica que la recogida o la entrega se haya realizado.',yes:'Confirmar',assigned:'Hacia recogida',picked_up:'En entrega',completed:'Terminada',gps:'Última ubicación transmitida',accuracy:'Precisión',settings:'Abrir ajustes',error:'Por revisar',retry:'Actualizar',only:'Usa una cuenta de repartidor.',stopped:'Se detuvo el envío local. No se pudo confirmar al servidor: el panel marcará la ubicación desactualizada. Reintenta con conexión.',note:'Tu ubicación se comparte solamente durante tu turno.',refreshError:'No se pudieron actualizar las entregas.',received:'Último envío exitoso'}
@@ -11,6 +16,8 @@ const words={
 function Button({title,onPress,disabled,secondary=false}){return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[s.button,secondary&&s.secondary,disabled&&{opacity:.5}]}><Text style={[s.buttonText,secondary&&{color:'#613098'}]}>{title}</Text></Pressable>}
 export default function App(){
  const[lang,setLang]=useState('fr'),[user,setUser]=useState(null),[email,setEmail]=useState(''),[password,setPassword]=useState(''),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[orders,setOrders]=useState([]),[gps,setGps]=useState({sharing:false}),[now,setNow]=useState(Date.now());
+ const [pushStatus,setPushStatus]=useState('pending');const pushBusy=useRef(false);
+ const n=notificationWords[lang];
  const t=k=>words[lang][k]||k;const epoch=useRef(0),refreshing=useRef(false),mounted=useRef(true);
  async function refresh(){
    if(refreshing.current)return;refreshing.current=true;const current=epoch.current;
@@ -20,11 +27,28 @@ export default function App(){
  }
  useEffect(()=>{mounted.current=true;(async()=>{try{if(await SecureStore.getItemAsync(SESSION)){const u=await request('/me');if(u.role==='driver')setUser(u)}}catch(e){setError(e.message)}finally{setLoading(false)}})();return()=>{mounted.current=false;epoch.current++}},[]);
  useEffect(()=>{if(!user)return;refresh();const timer=setInterval(refresh,12000);const sub=AppState.addEventListener('change',state=>{if(state==='active')refresh()});return()=>{clearInterval(timer);sub.remove()}},[user]);
+ async function enableNotifications(ask=true){
+   if(pushBusy.current)return false;pushBusy.current=true;const current=epoch.current;
+   try{const ok=await registerNotifications(lang,ask);if(mounted.current&&current===epoch.current)setPushStatus(ok?'ready':'blocked');return ok;}
+   catch{if(mounted.current&&current===epoch.current)setPushStatus('failed');return false;}
+   finally{pushBusy.current=false;}
+ }
+ useEffect(()=>{
+   if(!user)return;
+   void enableNotifications();
+   const remove=onDeliveryNotification(()=>void refresh());
+   const sub=AppState.addEventListener('change',state=>{if(state==='active')void enableNotifications(false)});
+   return()=>{remove();sub.remove()};
+ },[user,lang]);
  async function action(fn){if(busy)return;setBusy(true);setError('');try{await fn()}catch(e){setError(e.message);Alert.alert(t('error'),e.message)}finally{setBusy(false)}}
  async function login(){const result=await request('/login','POST',{email,password});if(result.user.role!=='driver'){await request('/logout','POST',{},result.token);throw Error(t('only'))}await saveToken(result.token);epoch.current++;setUser(result.user);setPassword('')}
  function connect(){Alert.alert(t('consentTitle'),t('consent'),[{text:t('cancel'),style:'cancel'},{text:t('allow'),onPress:()=>action(async()=>{await startSharing();await refresh()})}])}
  async function disconnect(){try{await stopSharing()}catch{throw Error(t('stopped'))}finally{setGps({sharing:false})}}
- async function logout(){let remoteError;try{await disconnect();await request('/logout','POST',{})}catch(e){remoteError=e}finally{await SecureStore.deleteItemAsync(SESSION);epoch.current++;setUser(null);setOrders([]);setGps({sharing:false})}if(remoteError)throw remoteError}
+ async function logout(){
+   await disconnect();await request('/logout','POST',{});
+   await SecureStore.deleteItemAsync(SESSION);epoch.current++;setUser(null);setOrders([]);setGps({sharing:false});setPushStatus('pending');
+ }
+
  function transition(order){const status=order.status==='assigned'?'picked_up':'delivered';Alert.alert(t('confirm'),t('confirmText'),[{text:t('cancel'),style:'cancel'},{text:t('yes'),onPress:()=>action(async()=>{await request('/deliveries/'+order.id,'PATCH',{status});await refresh()})}])}
  const fresh=gps.last&&now-gps.last.measuredAt<90000&&now-gps.last.sentAt<90000;
  const status=!gps.sharing?t('offline'):gps.error?t('stale'):fresh?t('online'):gps.last?t('stale'):t('waiting');
@@ -34,6 +58,9 @@ export default function App(){
  {loading?<ActivityIndicator size="large" color="#613098"/>:!user?<View style={s.card}><Text style={s.hero}>{t('hello')}</Text><Text style={s.muted}>{t('intro')}</Text><Text style={s.label}>{t('email')}</Text><TextInput accessibilityLabel={t('email')} style={s.input} value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" autoComplete="email"/><Text style={s.label}>{t('password')}</Text><TextInput accessibilityLabel={t('password')} style={s.input} value={password} onChangeText={setPassword} secureTextEntry autoComplete="current-password"/><Button title={t('login')} disabled={busy||!email||!password} onPress={()=>action(login)}/></View>:<>
  <Text style={s.eyebrow}>{t('driver')}</Text><Text style={s.hero}>{user.name}</Text>
  <View style={s.card}><View style={s.statusRow}><View style={[s.dot,{backgroundColor:gps.sharing&&fresh&&!gps.error?'#319363':gps.sharing?'#cf8a32':'#9a90a8'}]}/><Text accessibilityLiveRegion="polite" style={s.status}>{status}</Text></View><Text style={s.muted}>{t('note')}</Text><Button disabled={busy} title={gps.sharing?t('stop'):t('start')} onPress={gps.sharing?()=>action(disconnect):connect} secondary={gps.sharing}/>{gps.last&&<Text style={s.gps}>{t('received')}: {new Date(gps.last.sentAt).toLocaleTimeString()} · {t('accuracy')}: {Math.round(gps.last.accuracy || 0)} m</Text>}<Pressable accessibilityRole="button" onPress={()=>Linking.openSettings()}><Text style={s.link}>{t('settings')}</Text></Pressable></View>
+ <View style={s.card}><Text style={s.status}>{n.title}</Text><Text accessibilityLiveRegion="polite" style={s.muted}>{n[pushStatus]}</Text>
+ <Button secondary disabled={busy} title={n.enable} onPress={()=>action(async()=>{if(!await enableNotifications())Alert.alert(n.title,n.blocked,[{text:'OK'},{text:t('settings'),onPress:()=>Linking.openSettings()}])})}/>
+ <Button disabled={busy||pushStatus!=='ready'} title={n.test} onPress={()=>action(async()=>{await testNotification(lang);Alert.alert(n.title,n.testing)})}/></View>
  <View style={s.metrics}><View style={s.metric}><Text style={s.number}>{active.length}</Text><Text style={s.muted}>{t('orders')}</Text></View><View style={s.metric}><Text style={s.number}>{done}</Text><Text style={s.muted}>{t('completed')}</Text></View></View>
  <View style={s.statusRow}><Text style={s.section}>{t('orders')}</Text><Pressable accessibilityRole="button" disabled={busy} onPress={refresh}><Text style={s.link}>{t('retry')}</Text></Pressable></View>
  {!active.length&&<View style={s.card}><Text style={s.status}>{t('empty')}</Text><Text style={s.muted}>{t('emptyDetail')}</Text></View>}
