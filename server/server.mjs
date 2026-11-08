@@ -1,3 +1,4 @@
+import {places,placesLimiter} from './places.mjs';
 import http from 'node:http';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
@@ -25,6 +26,8 @@ const accountPages=Object.fromEntries(['forgot-password','reset-password','resta
 const termsPages=Object.fromEntries(['2026-10-23-v1','2026-10-23-v2'].map(version=>['/terms/'+version,readFileSync(new URL('./public/conditions-'+version+'.html',import.meta.url))]));
 const jingle=readFileSync(new URL('./public/assignment-jingle.mp3',import.meta.url));
 const driverPortrait=readFileSync(new URL('./public/livreur-team-v1.webp',import.meta.url));
+const limitPlaces=placesLimiter();
+const addressScript=readFileSync(new URL('./public/address-suggestions.js',import.meta.url));
 const attempts=new Map();
 const requestAttempts=new Map();
 let requestWindow={start:Date.now(),count:0};
@@ -56,6 +59,7 @@ export const server=http.createServer(async(req,res)=>{
     }
     if(['GET','HEAD'].includes(req.method)&&path==='/livreur-team-v1.webp'){res.writeHead(200,{'Content-Type':'image/webp','Content-Length':driverPortrait.length,'Cache-Control':'public, max-age=86400'});res.end(req.method==='HEAD'?undefined:driverPortrait);return;}
     if(req.method==='GET'&&(path==='/conditions'||termsPages[path])){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(termsPages[path==='/conditions'?'/terms/2026-10-23-v2':path]);return;}
+    if(req.method==='GET'&&path==='/address-suggestions.js'){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8'});res.end(addressScript);return;}
     if(req.method==='GET'&&path==='/health'){send(200,{ok:true});return;}
     if(req.method==='POST'&&path==='/stripe/webhook'){
       const config=paymentConfig();const chunks=[];let length=0;
@@ -71,6 +75,11 @@ export const server=http.createServer(async(req,res)=>{
       let raw=''; for await (const chunk of req){raw+=chunk; if(Buffer.byteLength(raw)>16384)throw new Problem(413,'Solicitud demasiado grande');}
       try {p=JSON.parse(raw || '{}');}catch{throw new Problem(400,'JSON incorrecto');}
       if(!p || typeof p!=='object'||Array.isArray(p))throw new Problem(400,'JSON incorrecto');
+    }
+    if(req.method==='POST'&&['/places/suggestions','/places/details'].includes(path)){
+      limitPlaces(req.socket.remoteAddress);
+      const details=path==='/places/details';
+      const result=await places(p,details);send(200,details?{address:result}:{suggestions:result});return;
     }
     if(req.method==='POST'&&['/password/forgot','/password/reset'].includes(path)){
       const now=Date.now(),key=req.socket.remoteAddress;
