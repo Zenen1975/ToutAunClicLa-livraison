@@ -247,7 +247,10 @@ export function createStore(path = 'livraison.sqlite') {
     },
     saveQuote(p,{publicQuote=false}={}) {
       p={...p,...routeInput(p)};
-      const priced=priceRoute(p),qid=id(),now=Date.now(),expiresAt=now+600000;
+      const now=Date.now();
+      fail(p.readyAt&&Date.parse(p.readyAt)<now+7200000,400,'Programa con al menos 2 horas de anticipación / Planifiez au moins 2 heures à l’avance');
+      const standard=priceRoute(p),discountCents=p.readyAt?Math.round(standard.totalCents*20/100):0;
+      const priced={...standard,standardFareCents:standard.totalCents,discountCents,totalCents:standard.totalCents-discountCents},qid=id(),expiresAt=now+600000;
       const taxes=deliveryTaxes(priced.totalCents);
       run(`INSERT INTO delivery_quotes(id,pickup,destination,ready_at,distance_meters,duration_seconds,baseline_seconds,distance_cents,traffic_cents,total_cents,expires_at,created_at,pickup_postal_code,destination_postal_code,gst_cents,qst_cents,tax_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,qid,p.pickup,p.destination,p.readyAt,
         priced.distanceMeters,priced.durationSeconds,priced.baselineSeconds,priced.distanceCents,priced.trafficCents,priced.totalCents,expiresAt,now,p.pickupPostalCode,p.destinationPostalCode,taxes.gstCents,taxes.qstCents,1);
@@ -283,6 +286,7 @@ export function createStore(path = 'livraison.sqlite') {
       fail(!quote||quote.expires_at<Date.now()||quote.tax_version!==1,409,'Cotización vencida. Calcula el precio nuevamente / Devis expiré. Recalculez le prix');
       fail(quote.pickup!==p.pickup.trim()||quote.destination!==p.destination.trim()||quote.ready_at!==(ready?new Date(ready).toISOString():''),409,'La ruta cambió. Calcula el precio nuevamente / Le trajet a changé. Recalculez le prix');
       fail(quote.pickup_postal_code!==p.pickupPostalCode||quote.destination_postal_code!==p.destinationPostalCode,409,'El código postal cambió. Calcula nuevamente / Code postal modifié. Recalculez le prix');
+      fail(ready&&Date.parse(ready)<quote.created_at+7200000,400,'Programa con al menos 2 horas de anticipación / Planifiez au moins 2 heures à l’avance');
       fail(!!one('SELECT id FROM delivery_requests WHERE quote_id=?',quote.id),409,'Cotización ya aceptada / Devis déjà accepté');
       const rid=id();
       db.exec('BEGIN IMMEDIATE');
