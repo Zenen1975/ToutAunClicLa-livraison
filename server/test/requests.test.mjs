@@ -102,3 +102,27 @@ test('TPS and TVQ are itemized on delivery fare; voluntary tips and courier comm
  assert.deepEqual(deliveryTaxes(1300),{subtotalCents:1300,gstCents:65,qstCents:130,totalWithTaxesCents:1495});
  const split=splitDeliveryPrice(1300,800);assert.equal(split.totalPriceCents,2295);assert.equal(split.commissionCents,130);assert.equal(split.driverPayoutCents,1970);assert.equal(split.gstCents,65);assert.equal(split.qstCents,130);
 });
+
+test('Scheduled quotes require two hours and discount the fare before taxes, preserve 90/10 and the full tip through payment and assignment',()=>{
+ const s=createStore(':memory:'),clock=Date.now,at=clock();Date.now=()=>at;
+ try{
+  const metrics={...input(),distanceMeters:5000,durationSeconds:2100,baselineSeconds:900};
+  for(const minutes of [1,60,119.99])assert.throws(()=>s.saveQuote({...metrics,readyAt:new Date(at+minutes*60000).toISOString()}),e=>e.status===400);
+  const immediate=s.saveQuote(metrics);assert.equal(immediate.subtotalCents,1396);assert.equal(immediate.discountCents,0);
+  const readyAt=new Date(at+7200000).toISOString(),q=s.saveQuote({...metrics,readyAt});
+  assert.equal(q.standardFareCents,1396);assert.equal(q.discountCents,279);assert.equal(q.subtotalCents,1117);
+  assert.equal(q.totalCents,1284);
+  Date.now=()=>at+60000; // Acceptance is still valid after reviewing the quote.
+  const body={...request(q),readyAt,tipCents:800,acceptTerms:true,termsVersion:'2026-10-23-v2'};
+  assert.throws(()=>s.createRequest({...body,readyAt:''}),e=>e.status===409);
+  const created=s.createRequest(body,null,{awaitPayment:true});
+  assert.equal(s.db.prepare('SELECT amount_cents FROM request_payments WHERE request_id=?').get(created.id).amount_cents,2084);
+  assert.deepEqual(s.createRequest(body,null,{awaitPayment:true}),created);
+  s.db.prepare("UPDATE delivery_requests SET payment_state='paid' WHERE id=?").run(created.id);
+  const admin=s.createUser({name:'Admin',email:'admin@example.test',password:'test-password-123',role:'admin'});
+  const driver=s.createUser({name:'Driver',email:'driver@example.test',password:'test-password-123'});
+  const {shiftId}=s.start(driver,true);s.locate(driver,{shiftId,latitude:45.5,longitude:-73.5,accuracy:5,measuredAt:Date.now()});
+  const d=s.createDelivery(admin,{requestId:created.id,driverId:driver.id});
+  assert.equal(d.delivery_fare_cents,1117);assert.equal(d.commission_cents,112);assert.equal(d.driver_payout_cents,1805);assert.equal(d.tip_cents,800);
+ }finally{Date.now=clock;s.db.close()}
+});
