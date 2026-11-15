@@ -103,12 +103,22 @@ test('TPS and TVQ are itemized on delivery fare; voluntary tips and courier comm
  const split=splitDeliveryPrice(1300,800);assert.equal(split.totalPriceCents,2295);assert.equal(split.commissionCents,130);assert.equal(split.driverPayoutCents,1970);assert.equal(split.gstCents,65);assert.equal(split.qstCents,130);
 });
 
-test('Scheduled quotes require two hours and discount the fare before taxes, preserve 90/10 and the full tip through payment and assignment',()=>{
+test('Pickup times before two hours keep the usual fare; from two hours discount before taxes and preserve 90/10 plus full tip through payment and assignment',()=>{
  const s=createStore(':memory:'),clock=Date.now,at=clock();Date.now=()=>at;
  try{
   const metrics={...input(),distanceMeters:5000,durationSeconds:2100,baselineSeconds:900};
-  for(const minutes of [1,60,119.99])assert.throws(()=>s.saveQuote({...metrics,readyAt:new Date(at+minutes*60000).toISOString()}),e=>e.status===400);
+  for(const minutes of [-1,0,0.99])assert.throws(()=>s.saveQuote({...metrics,readyAt:new Date(at+minutes*60000).toISOString()}),e=>e.status===400);
   const immediate=s.saveQuote(metrics);assert.equal(immediate.subtotalCents,1396);assert.equal(immediate.discountCents,0);
+  for(const minutes of [1,60,90,119.999]){
+   const readyAt=new Date(at+minutes*60000).toISOString();
+   const early=s.saveQuote({...metrics,readyAt,discountCents:9999,totalCents:1});
+   assert.equal(early.subtotalCents,1396);assert.equal(early.discountCents,0);
+   const body={...request(early),readyAt,tipCents:800,acceptTerms:true,termsVersion:'2026-10-23-v2'};
+   const created=s.createRequest(body,null,{awaitPayment:true});
+   assert.equal(s.db.prepare('SELECT amount_cents FROM request_payments WHERE request_id=?').get(created.id).amount_cents,2405);
+   const split=splitDeliveryPrice(early.subtotalCents,800);assert.equal(split.commissionCents,140);assert.equal(split.driverPayoutCents,2056);
+  }
+
   const readyAt=new Date(at+7200000).toISOString(),q=s.saveQuote({...metrics,readyAt});
   assert.equal(q.standardFareCents,1396);assert.equal(q.discountCents,279);assert.equal(q.subtotalCents,1117);
   assert.equal(q.totalCents,1284);
