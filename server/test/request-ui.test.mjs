@@ -50,6 +50,25 @@ test('Delivery mode buttons invalidate quotes and scheduled pickups under two ho
  n('readyAt').value=new Date(Date.now()+3600000).toISOString();
  const count=s.calls.filter(c=>c.path==='/quotes').length;await n('calculate').onclick();
  assert.equal(s.calls.filter(c=>c.path==='/quotes').length,count);assert.match(n('error').textContent,/2 horas/);
- n('timingNow').onclick();assert.equal(n('readyAt').required,false);assert.equal(n('readyAt').value,'');
+ n('timingNow').onclick();assert.equal(n('readyAt').required,false);assert.ok(n('readyAt').value);
  assert.equal(n('timingNow').attributes['aria-pressed'],'true');
+});
+
+test('Usual-fare option allows a 90-minute pickup or no time, rejects two hours, and mode/time changes clear quotes',async()=>{
+ const s=setup(),n=id=>s.nodes.get(id);
+ n('timingNow').onclick();assert.equal(n('readyAt').required,false);
+ n('readyAt').value=new Date(Date.now()+90*60000).toISOString();
+ await n('calculate').onclick();
+ const body=JSON.parse(s.calls.find(c=>c.path==='/quotes').options.body);
+ assert.equal(body.readyAt,n('readyAt').value);assert.ok(s.evaluate('quote'));
+ n('readyAt').value=new Date(Date.now()+121*60000).toISOString();n('readyAt').events.input();
+ assert.equal(s.evaluate('quote'),null);const count=s.calls.filter(c=>c.path==='/quotes').length;
+ await n('calculate').onclick();assert.equal(s.calls.filter(c=>c.path==='/quotes').length,count);
+ assert.match(n('error').textContent,/menos de 2 horas/);
+ n('timingScheduled').onclick();await n('calculate').onclick();
+ assert.equal(s.calls.filter(c=>c.path==='/quotes').length,count+1);
+ n('timingNow').onclick();n('readyAt').value='';await n('calculate').onclick();
+ assert.equal(JSON.parse(s.calls.filter(c=>c.path==='/quotes').at(-1).options.body).readyAt,'');
+ s.evaluate("lang='fr';renderTiming()");
+ assert.match(n('scheduleHelp').textContent,/90 minutes/);
 });
